@@ -1,0 +1,15 @@
+[build]
+  functions = "netlify/functions"
+  publish = "public"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Headers = "Content-Type"
+    Access-Control-Allow-Methods = "GET, POST, PATCH, OPTIONS"
+
+# Auto-process call every Sunday at 11:00 AM PT (19:00 UTC)
+# Fathom transcript is usually ready 30-60 min after the call ends
+[functions."auto-process-call"]
+  schedule = "0 19 * * 0"
