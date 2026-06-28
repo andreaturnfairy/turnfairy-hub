@@ -45,6 +45,23 @@ function prop(page, name) {
 }
 
 exports.handler = async (event) => {
+  // Fast path: ?type=settings only returns settings (used for PIN loading)
+  if (event.queryStringParameters?.type === 'settings') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    try {
+      const setRes = await notionRequest('POST', `/v1/databases/${process.env.NOTION_DB_SETTINGS}/query`, {});
+      const settings = [];
+      (setRes?.results || []).forEach(p => {
+        const key = p.properties['Key']?.title?.[0]?.plain_text;
+        const val = p.properties['Value']?.rich_text?.[0]?.plain_text;
+        if (key) settings.push({ key, value: val });
+      });
+      return { statusCode: 200, headers, body: JSON.stringify({ settings }) };
+    } catch(e) {
+      return { statusCode: 500, headers, body: JSON.stringify({ error: e.message }) };
+    }
+  }
+
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
