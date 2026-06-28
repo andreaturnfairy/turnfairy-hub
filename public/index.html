@@ -2168,14 +2168,93 @@ async function deleteFromNotion(notionId) {
   if (!result.success) throw new Error(result.error || 'Delete failed');
 }
 
+// PINs loaded from Notion Settings on startup
+let _userPins = {};
+
+async function loadPins() {
+  try {
+    const res = await fetch('/.netlify/functions/notion-get?type=settings');
+    const data = await res.json();
+    (data.settings || []).forEach(s => {
+      if (s.key && s.key.startsWith('pin_')) {
+        _userPins[s.key.replace('pin_', '')] = s.value;
+      }
+    });
+  } catch(e) {
+    console.warn('Could not load PINs from Notion:', e);
+  }
+}
+
 function selectUser(name) {
+  // Show PIN entry
+  const picker = document.getElementById('namePicker');
+  picker.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:28px 24px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(43,33,71,.3);text-align:center">
+      <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:800;color:#472A66;margin-bottom:4px">Turnfairy</div>
+      <div style="font-size:10px;color:#5DDFC8;text-transform:uppercase;letter-spacing:2.5px;font-weight:700;margin-bottom:20px">Manager Hub</div>
+      <div style="font-size:15px;font-weight:600;color:#2B2147;margin-bottom:6px">Hi, ${name}</div>
+      <div style="font-size:13px;color:#5A4E72;margin-bottom:20px">Enter your PIN to continue</div>
+      <div style="display:flex;justify-content:center;gap:10px;margin-bottom:20px">
+        <input id="pin1" type="password" maxlength="1" inputmode="numeric"
+          style="width:52px;height:60px;text-align:center;font-size:24px;font-weight:700;border:2px solid #E2D9F3;border-radius:10px;outline:none;color:#2B2147"
+          oninput="pinAdvance(this,'pin2')" onfocus="this.style.borderColor='#603D91'" onblur="this.style.borderColor='#E2D9F3'">
+        <input id="pin2" type="password" maxlength="1" inputmode="numeric"
+          style="width:52px;height:60px;text-align:center;font-size:24px;font-weight:700;border:2px solid #E2D9F3;border-radius:10px;outline:none;color:#2B2147"
+          oninput="pinAdvance(this,'pin3')" onfocus="this.style.borderColor='#603D91'" onblur="this.style.borderColor='#E2D9F3'">
+        <input id="pin3" type="password" maxlength="1" inputmode="numeric"
+          style="width:52px;height:60px;text-align:center;font-size:24px;font-weight:700;border:2px solid #E2D9F3;border-radius:10px;outline:none;color:#2B2147"
+          oninput="pinAdvance(this,'pin4')" onfocus="this.style.borderColor='#603D91'" onblur="this.style.borderColor='#E2D9F3'">
+        <input id="pin4" type="password" maxlength="1" inputmode="numeric"
+          style="width:52px;height:60px;text-align:center;font-size:24px;font-weight:700;border:2px solid #E2D9F3;border-radius:10px;outline:none;color:#2B2147"
+          oninput="pinSubmit('${name}')" onfocus="this.style.borderColor='#603D91'" onblur="this.style.borderColor='#E2D9F3'">
+      </div>
+      <div id="pinError" style="color:#dc2626;font-size:13px;min-height:18px;margin-bottom:12px"></div>
+      <button onclick="resetNamePicker()" style="background:none;border:none;color:#9B8FB5;font-size:13px;cursor:pointer;text-decoration:underline">← Back</button>
+    </div>`;
+  setTimeout(() => document.getElementById('pin1')?.focus(), 100);
+}
+
+function pinAdvance(el, nextId) {
+  if (el.value.length === 1) document.getElementById(nextId)?.focus();
+}
+
+function pinSubmit(name) {
+  const pin = ['pin1','pin2','pin3','pin4'].map(id => document.getElementById(id)?.value || '').join('');
+  if (pin.length < 4) return;
+
+  const expected = _userPins[name];
+  if (expected && pin !== expected) {
+    document.getElementById('pinError').textContent = 'Incorrect PIN. Try again.';
+    ['pin1','pin2','pin3','pin4'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+    document.getElementById('pin1')?.focus();
+    return;
+  }
+
+  // PIN correct (or no PIN configured — open access)
   currentUser = name;
   localStorage.setItem('tf_user', name);
+
+  // Route Penny to her portal
+  if (name === 'Pennylaine') {
+    window.location.href = '/penny';
+    return;
+  }
+
   document.getElementById('namePicker').style.display = 'none';
   loadFromNotion();
 }
 
-init();
+function resetNamePicker() {
+  // Rebuild original name picker
+  document.getElementById('namePicker').style.display = 'flex';
+  document.getElementById('namePicker').innerHTML = originalNamePickerHTML;
+}
+
+// Store original picker HTML for back button
+const originalNamePickerHTML = document.getElementById('namePicker')?.innerHTML || '';
+
+// Load PINs from Notion then init
+loadPins().then(() => init());
 </script>
 
 <!-- NAME PICKER -->
