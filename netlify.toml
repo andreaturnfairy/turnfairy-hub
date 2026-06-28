@@ -17,3 +17,8 @@
 # Saturday pre-call briefing email — every Saturday at 9:00 AM PT (17:00 UTC)
 [functions."saturday-briefing"]
   schedule = "0 17 * * 6"
+
+# Penny weekly task email — every Monday at 8:00 AM PT (16:00 UTC)
+# NOTE: Will not send until PENNY_EMAIL and RESEND_API_KEY are set in Netlify env vars
+[functions."penny-monday-email"]
+  schedule = "0 16 * * 1"
