@@ -30,6 +30,7 @@ const DB_SETTINGS    = process.env.NOTION_DB_SETTINGS;
 const TEAM_EMAILS = [
   'greg@turnfairy.com',
   'andrea@turnfairy.com',
+  'andrea@thatvacationvibe.com',
   'mike@turnfairy.com',
   'lauren@turnfairy.com',
 ];
