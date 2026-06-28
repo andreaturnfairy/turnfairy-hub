@@ -474,7 +474,7 @@ Deployed at **turnfairy-hub.netlify.app**. GitHub repo: **andreaturnfairy/turnfa
 3. Push back to GitHub via API — Netlify auto-deploys in ~15 seconds
 4. Never assume `/home/claude/` has the current version — always pull from GitHub first
 
-**GitHub token:** `[stored in OneDrive _Shared Resources/Passwords & Access]` (andreaturnfairy account)
+**GitHub token:** `[stored in password manager]` (andreaturnfairy account)
 
 ---
 
@@ -580,6 +580,11 @@ Single-file HTML/CSS/JS app (`turnfairy-operations.html`). No build process. Gre
 - Saturday briefing email function ✅ (built June 21 — needs RESEND_API_KEY to activate)
 - Auto-process-call function ✅ (built June 21 — runs Sunday 11am PT)
 - Penny Monday email function ✅ (built June 21 — needs RESEND_API_KEY to activate)
+- GitHub Actions email automation ✅ (built June 21 — send-reminder.yml, send-agenda.yml, send-summary.yml)
+- 🔲 NO UPDATE stale badge — flag action items with no status change in 7+ days (ref: Misfit Island Hub)
+- 🔲 Action items stats dashboard — In Progress / On Hold / Done counts on Actions tab
+- 🔲 Drag-and-drop agenda reordering within and across sections
+- 🔲 30-day decision auto-archive — keep Decisions tab clean automatically
 
 ---
 
@@ -628,6 +633,50 @@ To trigger manually: POST to turnfairy-hub.netlify.app/.netlify/functions/auto-p
 **The end state:** Mike and Lauren operate day-to-day supported by AI agents. Penny is a Junior Agent Operator. Greg and Andrea own without operating.
 
 **TVV LLC:** Greg and Andrea's company owning RSR, 9th St, 13th St properties. Two contracts drafted for Turnfairy to formally manage TVV: Co-Hosting Services Agreement (backdated Dec 1 2025) and Professional Services Agreement (July 25 2026). Signing at July 25 in-person meeting. NV manager designation (Mike or Lauren) still to be confirmed.
+
+---
+
+## Critical Development Lessons (from Misfit Island Hub + Turnfairy builds)
+
+These are hard-won lessons that prevent common bugs. Read before writing any code.
+
+**Notion API:**
+- All Notion writes must go through `/.netlify/functions/notion-save` — direct Notion API calls are blocked by CORS from the browser
+- Owner/select field values must be **Title Case** matching Notion select options exactly (e.g. "In Progress" not "in progress", "Pennylaine" not "pennylaine")
+- When injecting JS via browser MCP, use unique variable names per execution — `actionList`, `decisionList` not `actions`, `decisions` — to avoid re-declaration errors
+- Notion token must be rotated if exposed in chat — treat it as compromised immediately
+
+**GitHub Actions:**
+- GitHub token needs **workflow** scope to push `.github/workflows/` files — `repo` scope alone is not enough
+- Use the Git trees API (not contents API) to create files in new directories
+- Workflow YAML syntax errors can fail silently — verify carefully before pushing
+- Keep email automation in GitHub Actions (free) rather than Netlify scheduled functions (paid tier required for reliable scheduling)
+
+**Azure / Microsoft Graph:**
+- `Mail.Send` requires an Exchange Online mailbox — GoDaddy email hosting does NOT work
+- Azure client secrets are shown only once at creation — save immediately to password manager
+- Never paste Azure secrets or GitHub tokens in chat — rotate immediately if exposed
+- The `Turnfairy-Graph-MCP` app registration is in the `andreathatvacationvibe.onmicrosoft.com` tenant
+  - Tenant ID: `3f795382-e8ea-45ce-a614-cdf3e67e4cff`
+  - Client ID: `7369ce50-a2f1-4246-9225-580943e4786c`
+  - Current permissions: Files.ReadWrite.All, Sites.ReadWrite.All, User.Read, Mail.Send
+
+**Email automation (GitHub Actions):**
+- Repo: `andreaturnfairy/turnfairy-hub` — workflows in `.github/workflows/`
+- `send-reminder.yml` — Saturday 9am PT, pre-call briefing
+- `send-agenda.yml` — Sunday 7am PT, day-of agenda (skips if meeting date doesn't match today)
+- `send-summary.yml` — manual trigger only, post-call summary
+- Script: `scripts/email-agent.js` — authenticates via Azure AD, queries Notion, sends via Graph API
+- Sender: `andrea@thatvacationvibe.com` (has Exchange Online mailbox)
+- Recipients: greg@turnfairy.com, andrea@turnfairy.com, andrea@thatvacationvibe.com, mike@turnfairy.com, lauren@turnfairy.com
+- GitHub secrets required: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `SENDER_EMAIL`, `NOTION_KEY`, `NOTION_DB_ACTIONS`, `NOTION_DB_DECISIONS`, `NOTION_DB_AGENDA`, `NOTION_DB_SETTINGS`
+
+**Hub development pattern (from Misfit Island):**
+- Iterative browser-tested development: push to GitHub → Netlify auto-deploys → verify live via browser MCP
+- Browser MCP JS injection is the fastest way to test Notion writes without redeploying
+- inferSection(text) keyword classifier pattern — lightweight, no AI needed, easily adapted to any taxonomy
+- localStorage username persistence — simple, no auth required, works across sessions
+- Direct Anthropic API calls work from browser on Netlify-hosted pages (no proxy needed)
 
 ---
 
