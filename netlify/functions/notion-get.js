@@ -5,6 +5,8 @@ const DB = {
   actions:   process.env.NOTION_DB_ACTIONS,
   agenda:    process.env.NOTION_DB_AGENDA,
   decisions: process.env.NOTION_DB_DECISIONS,
+  settings:  process.env.NOTION_DB_SETTINGS,
+  pipeline:  process.env.NOTION_DB_PIPELINE,
 };
 
 function notionRequest(method, path, body) {
