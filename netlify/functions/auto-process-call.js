@@ -136,9 +136,67 @@ ${transcript.slice(0, 30000)}`;
     const today = new Date().toISOString().split('T')[0];
     const sourceMeeting = `Weekly Call — ${today}`;
 
-    // ── 4. Push action items to Notion ────────────────────────
+    // ── 4. Fetch existing open action items for duplicate check ─
+    const existingActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Status', select: { does_not_equal: 'Done' } },
+          { property: 'Status', select: { does_not_equal: 'Archived' } },
+        ]},
+        page_size: 100
+      })
+    });
+    const existingActData = await existingActRes.json();
+    const existingTasks = (existingActData.results || []).map(p =>
+      (p.properties['Action Item']?.title?.[0]?.plain_text || '').toLowerCase().trim()
+    ).filter(Boolean);
+
+    // Fetch existing decisions for duplicate check
+    const existingDecRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+      body: JSON.stringify({ filter: { property: 'Date', date: { equals: today } }, page_size: 100 })
+    });
+    const existingDecData = await existingDecRes.json();
+    const existingDecisions = (existingDecData.results || []).map(p =>
+      (p.properties['Decision']?.title?.[0]?.plain_text || '').toLowerCase().trim()
+    ).filter(Boolean);
+
+    // Similarity check — returns true if two strings are similar enough to be duplicates
+    function isSimilar(a, b) {
+      a = a.toLowerCase().trim();
+      b = b.toLowerCase().trim();
+      if (a === b) return true;
+      // Check if one contains the other (handles shortened versions)
+      if (a.includes(b) || b.includes(a)) return true;
+      // Check word overlap — if >60% of words match, consider duplicate
+      const wordsA = new Set(a.split(/\s+/).filter(w => w.length > 3));
+      const wordsB = new Set(b.split(/\s+/).filter(w => w.length > 3));
+      if (wordsA.size === 0 || wordsB.size === 0) return false;
+      const overlap = [...wordsA].filter(w => wordsB.has(w)).length;
+      const similarity = overlap / Math.min(wordsA.size, wordsB.size);
+      return similarity >= 0.6;
+    }
+
+    function isDuplicateTask(task) {
+      return existingTasks.some(existing => isSimilar(task, existing));
+    }
+
+    function isDuplicateDecision(text) {
+      return existingDecisions.some(existing => isSimilar(text, existing));
+    }
+
+    // ── 5. Push action items to Notion (with duplicate prevention) ─
     let actionCount = 0;
+    let actionSkipped = 0;
     for (const item of (parsed.actionItems || [])) {
+      if (isDuplicateTask(item.task)) {
+        console.log(`  SKIP duplicate action: ${item.task.slice(0, 60)}`);
+        actionSkipped++;
+        continue;
+      }
       const section = item.section && item.section !== 'Other' ? item.section : classifySection(item.task);
       await notionCreate(NOTION_DB_ACTIONS, {
         'Action Item': ttl(item.task),
@@ -149,11 +207,20 @@ ${transcript.slice(0, 30000)}`;
         'Source Meeting': txt(sourceMeeting),
       });
       actionCount++;
+      // Add to existing list to prevent duplicates within same batch
+      existingTasks.push(item.task.toLowerCase().trim());
     }
+    console.log(`Actions: ${actionCount} created, ${actionSkipped} skipped as duplicates`);
 
-    // ── 5. Push decisions to Notion ───────────────────────────
+    // ── 6. Push decisions to Notion (with duplicate prevention) ──
     let decisionCount = 0;
+    let decisionSkipped = 0;
     for (const d of (parsed.decisions || [])) {
+      if (isDuplicateDecision(d.text)) {
+        console.log(`  SKIP duplicate decision: ${d.text.slice(0, 60)}`);
+        decisionSkipped++;
+        continue;
+      }
       const section = d.section && d.section !== 'Other' ? d.section : classifySection(d.text);
       await notionCreate(NOTION_DB_DECISIONS, {
         'Decision': ttl(d.text),
@@ -165,7 +232,9 @@ ${transcript.slice(0, 30000)}`;
         'From Transcript': { checkbox: true },
       });
       decisionCount++;
+      existingDecisions.push(d.text.toLowerCase().trim());
     }
+    console.log(`Decisions: ${decisionCount} created, ${decisionSkipped} skipped as duplicates`);
 
     console.log(`Done: ${actionCount} actions, ${decisionCount} decisions`);
 
