@@ -168,6 +168,89 @@ ${transcript.slice(0, 30000)}`;
     }
 
     console.log(`Done: ${actionCount} actions, ${decisionCount} decisions`);
+
+    // ── 6. Send post-call summary email via Resend ────────────
+    const RESEND_KEY = process.env.RESEND_API_KEY;
+    const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
+    const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
+    const HUB_URL = 'https://turnfairy-hub.netlify.app';
+
+    let emailSent = false;
+    if (RESEND_KEY && (actionCount > 0 || decisionCount > 0)) {
+      try {
+        // Fetch open action items from Notion for the summary
+        const actRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${NOTION_TOKEN}`,
+            'Content-Type': 'application/json',
+            'Notion-Version': '2022-06-28',
+          },
+          body: JSON.stringify({
+            filter: { and: [
+              { property: 'Status', select: { does_not_equal: 'Done' } },
+              { property: 'Status', select: { does_not_equal: 'Archived' } },
+            ]},
+            sorts: [{ timestamp: 'created_time', direction: 'ascending' }]
+          })
+        });
+        const actData = await actRes.json();
+        const openItems = (actData.results || []).map(p => ({
+          task: p.properties['Action Item']?.title?.[0]?.plain_text || '',
+          owner: p.properties['Owner']?.select?.name || 'Unassigned',
+          priority: p.properties['Priority']?.select?.name || 'Normal',
+        })).filter(a => a.task);
+
+        // Build email body
+        const callDateFmt = new Date(today + 'T12:00:00').toLocaleDateString('en-US', {
+          weekday: 'long', month: 'long', day: 'numeric'
+        });
+
+        let body = `Hi team,\n\nPost-call summary from the Turnfairy call on ${callDateFmt}.\n\n`;
+
+        body += `TRANSCRIPT PROCESSED\n`;
+        body += `  • ${actionCount} new action items added to Notion\n`;
+        body += `  • ${decisionCount} decisions logged\n\n`;
+
+        if (openItems.length) {
+          const owners = [...new Set(openItems.map(a => a.owner))].sort();
+          body += `OPEN ACTION ITEMS BY OWNER (${openItems.length} total)\n`;
+          owners.forEach(owner => {
+            const items = openItems.filter(a => a.owner === owner);
+            body += `\n${owner} (${items.length}):\n`;
+            items.forEach(a => {
+              const flag = a.priority === 'Urgent' ? ' 🚨' : '';
+              body += `  ☐ ${a.task}${flag}\n`;
+            });
+          });
+          body += '\n';
+        }
+
+        body += `──────────────────────────────\nView and update in the Hub: ${HUB_URL}`;
+
+        const subject = `Turnfairy Post-Call Summary — ${callDateFmt}`;
+
+        const emailRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: FROM_EMAIL, to: TEAM_EMAILS, subject, text: body })
+        });
+
+        if (emailRes.ok) {
+          emailSent = true;
+          console.log('✓ Post-call summary email sent');
+        } else {
+          console.error('Email send failed:', await emailRes.text());
+        }
+      } catch (emailErr) {
+        console.error('Email error:', emailErr.message);
+      }
+    } else if (!RESEND_KEY) {
+      console.log('No RESEND_API_KEY — skipping email');
+    } else {
+      console.log('No new items processed — skipping email');
+    }
+
     return {
       statusCode: 200,
       body: JSON.stringify({
@@ -175,6 +258,7 @@ ${transcript.slice(0, 30000)}`;
         call: recent.title,
         actionItems: actionCount,
         decisions: decisionCount,
+        emailSent,
       })
     };
 
