@@ -64,10 +64,7 @@ exports.handler = async (event) => {
     // ── 1. Find most recent Fathom call from last 48 hours ────
     const calls = await fathomGet('/calls?limit=10');
     const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-    const recent = (calls.data || []).find(c => 
-      c.created_at > cutoff && 
-      (c.title?.toLowerCase().includes('turnfairy') || c.title?.toLowerCase().includes('weekly'))
-    );
+    const recent = (calls.data || []).find(c => c.created_at > cutoff);
 
     if (!recent) {
       console.log('No recent Turnfairy call found');
