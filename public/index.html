@@ -2127,6 +2127,10 @@ async function loadFromNotion() {
         return { id: a.id, task: a.task, owner: a.owner, status: normStatus, priority: a.priority || 'Normal', section, due: a.due, notes: a.notes, created: a.created, notionId: a.id };
       });
     }
+    if (data.pipeline?.length) {
+      pipelineLeads = data.pipeline;
+      renderPipeline();
+    }
     if (data.agenda?.length) {
       agendaItems = data.agenda.map(a => ({ id: a.id, topic: a.topic, presenter: a.presenter, section: a.section || 'Other', duration: a.duration || 5, notes: a.notes, notionId: a.id }));
     }

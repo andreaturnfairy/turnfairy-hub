@@ -6,6 +6,7 @@
 // ─────────────────────────────────────────────────────────────
 
 const FATHOM_API_KEY = process.env.FATHOM_API_KEY;
+const NOTION_DB_PIPELINE = process.env.NOTION_DB_PIPELINE;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
@@ -212,6 +213,60 @@ ${transcript.slice(0, 30000)}`;
     }
     console.log(`Actions: ${actionCount} created, ${actionSkipped} skipped as duplicates`);
 
+    // ── 6b. Update pipeline from transcript ───────────────────
+    let pipelineCount = 0;
+    if (NOTION_DB_PIPELINE && parsed.pipelineUpdates?.length) {
+      // Fetch existing pipeline leads
+      const pipelineRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_PIPELINE}/query`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+        body: JSON.stringify({ page_size: 100 })
+      });
+      const pipelineData = await pipelineRes.json();
+      const existingLeads = (pipelineData.results || []).map(p => ({
+        id: p.id,
+        name: (p.properties['Lead Name']?.title?.[0]?.plain_text || '').toLowerCase(),
+      }));
+
+      for (const update of parsed.pipelineUpdates) {
+        const nameLower = (update.name || '').toLowerCase();
+        const existing = existingLeads.find(l => l.name.includes(nameLower) || nameLower.includes(l.name));
+
+        if (existing) {
+          // Update existing lead
+          const props = {};
+          if (update.stage) props['Stage'] = { select: { name: update.stage } };
+          if (update.notes) {
+            // Append to existing notes
+            props['Notes'] = { rich_text: [{ text: { content: `[${today}] ${update.notes}` } }] };
+          }
+          if (update.followUpDate) props['Follow Up Date'] = { date: { start: update.followUpDate } };
+          props['Last Contact'] = { date: { start: today } };
+
+          await fetch(`https://api.notion.com/v1/pages/${existing.id}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+            body: JSON.stringify({ properties: props })
+          });
+          console.log(`  Pipeline updated: ${update.name} → ${update.stage}`);
+        } else {
+          // Create new lead
+          await notionCreate(NOTION_DB_PIPELINE, {
+            'Lead Name': { title: [{ text: { content: update.name } }] },
+            'Stage': { select: { name: update.stage || 'New' } },
+            'Owner': update.owner ? { select: { name: update.owner } } : undefined,
+            'Notes': update.notes ? { rich_text: [{ text: { content: `[${today}] ${update.notes}` } }] } : undefined,
+            'Follow Up Date': update.followUpDate ? { date: { start: update.followUpDate } } : undefined,
+            'Last Contact': { date: { start: today } },
+            'Source': { rich_text: [{ text: { content: 'Transcript' } }] },
+          });
+          console.log(`  Pipeline created: ${update.name} (${update.stage || 'New'})`);
+        }
+        pipelineCount++;
+      }
+    }
+    console.log(`Pipeline: ${pipelineCount} leads updated`);
+
     // ── 6. Push decisions to Notion (with duplicate prevention) ──
     let decisionCount = 0;
     let decisionSkipped = 0;
@@ -302,7 +357,7 @@ ${transcript.slice(0, 30000)}`;
         let body = `Hi team,\n\nHere's your post-call summary from the Turnfairy call on ${callDateFmt}.\n\n`;
         body += `────────────────────────────────\n`;
         body += `TRANSCRIPT ANALYZED\n`;
-        body += `  ${actionCount} new action items · ${decisionCount} decisions logged\n\n`;
+        body += `  ${actionCount} new action items · ${decisionCount} decisions logged${pipelineCount > 0 ? ` · ${pipelineCount} pipeline leads updated` : ''}\n\n`;
 
         // Decisions from today
         if (todaysDecisions.length) {
