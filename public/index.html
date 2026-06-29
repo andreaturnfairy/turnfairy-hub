@@ -763,17 +763,7 @@ function init() {
   }
   if (savedTime) document.getElementById('meetingTime').value = savedTime;
   autoArchiveOldDecisions();
-  // Seed known pipeline leads from transcript if none exist
-  if (!leads.length) {
-    leads = [
-      { id: nextLeadId++, name: 'Priscilla — Carnelian Bay', property: '3bd/3ba Lake Tahoe (part-time owner)', source: 'Cold outreach — kayak sale', stage: 'Follow-up', followup: '2026-08-01', owner: 'Lauren', notes: 'Current PM charges 25-35%. Lease renewal with current PM is Sept. Contact monthly. Interested in ski leases too.', created: '2026-06-14' },
-      { id: nextLeadId++, name: 'Josephine', property: 'Large property — renovation in progress', source: 'Direct inquiry', stage: 'Follow-up', followup: '2026-06-22', owner: 'Andrea', notes: 'Proposal sent. Andrea confirmed via text that Josephine received it. No response yet. Under renovation (master bedroom windows, ~1 month). Target: close before construction ends so onboarding is ready to go live immediately. Melissa quote received — higher end but in range.', created: '2026-06-14' },
-      { id: nextLeadId++, name: 'Ivan', property: 'Multiple properties (Google exec)', source: 'Referral via Gardner', stage: 'New', followup: '', owner: 'Lauren', notes: 'High-value target. Gardner connection. Interested in buying more properties.', created: '2026-06-14' },
-      { id: nextLeadId++, name: 'Co-host Inquiry #1', property: 'TBD', source: 'Co-host platform', stage: 'New', followup: '', owner: 'Greg', notes: 'Early stage, low probability near-term. Received week of June 19. No details yet.', created: '2026-06-19' },
-      { id: nextLeadId++, name: 'Co-host Inquiry #2', property: 'TBD', source: 'Co-host platform', stage: 'New', followup: '', owner: 'Greg', notes: 'Early stage, low probability near-term. Received week of June 19. No details yet.', created: '2026-06-19' },
-    ];
-    nextLeadId = leads.length + 1;
-  }
+  // Pipeline loads from Notion via loadFromNotion()
   renderAgenda(); renderActions(); renderDecisions(); renderROS(); renderEmailTemplates();
   if (currentUser) {
     loadFromNotion();
@@ -1934,29 +1924,49 @@ function saveLead() {
   };
   if (editingLeadId) {
     const idx = leads.findIndex(l => l.id === editingLeadId);
-    if (idx >= 0) leads[idx] = { ...leads[idx], ...data };
+    if (idx >= 0) {
+      leads[idx] = { ...leads[idx], ...data };
+      // Update in Notion
+      const lead = leads[idx];
+      if (lead.notionId) {
+        saveToNotion('pipeline', {
+          name: data.name, stage: data.stage, owner: data.owner,
+          address: data.property, source: data.source,
+          notes: data.notes, followUpDate: data.followup,
+          lastContact: new Date().toISOString().split('T')[0],
+        }, lead.notionId);
+      }
+    }
     showToast('Lead updated');
   } else {
-    leads.push({ id: nextLeadId++, ...data, created: new Date().toISOString().split('T')[0] });
+    const newId = nextLeadId++;
+    const newLead = { id: newId, ...data, created: new Date().toISOString().split('T')[0] };
+    leads.push(newLead);
+    // Create in Notion
+    saveToNotion('pipeline', {
+      name: data.name, stage: data.stage, owner: data.owner,
+      address: data.property, source: data.source,
+      notes: data.notes, followUpDate: data.followup,
+      lastContact: new Date().toISOString().split('T')[0],
+    }).then(id => { if (id) newLead.notionId = id; });
     showToast('Lead added');
   }
   closeModal('modal-crm');
   renderCRM();
-  saveLeadsToNotion();
 }
 
 function deleteLead(id) {
+  const lead = leads.find(l => l.id === id);
   leads = leads.filter(l => l.id !== id);
   renderCRM();
   showToast('Lead removed');
+  if (lead?.notionId) {
+    saveToNotion('pipeline', { stage: 'Lost' }, lead.notionId);
+  }
 }
 
 function saveLeadsToNotion() {
-  // Persist leads via Notion save — tagged as type 'leads'
-  if (!notionAvailable) return;
-  leads.filter(l => !l.notionId).forEach(l => {
-    saveToNotion('leads', { name: l.name, property: l.property, source: l.source, stage: l.stage, followup: l.followup, owner: l.owner, notes: l.notes }).then(id => { if (id) l.notionId = id; });
-  });
+  // Individual saves now handled inline in saveLead() and deleteLead()
 }
 
 // CRM renders on tab click via renderCRM() called from showPanel directly
@@ -2128,8 +2138,23 @@ async function loadFromNotion() {
       });
     }
     if (data.pipeline?.length) {
-      pipelineLeads = data.pipeline;
-      renderPipeline();
+      // Map Notion pipeline fields to existing lead object structure
+      leads = data.pipeline.map((p, i) => ({
+        id: i + 1,
+        notionId: p.notionId || p.id,
+        name: p.name || '',
+        property: p.address || '',
+        source: p.source || '',
+        stage: p.stage || 'New',
+        followup: p.followUpDate || '',
+        owner: p.owner || '',
+        notes: p.notes || '',
+        platforms: p.platforms || '',
+        lastContact: p.lastContact || '',
+        created: p.created || new Date().toISOString().split('T')[0],
+      }));
+      nextLeadId = leads.length + 1;
+      renderCRM();
     }
     if (data.agenda?.length) {
       agendaItems = data.agenda.map(a => ({ id: a.id, topic: a.topic, presenter: a.presenter, section: a.section || 'Other', duration: a.duration || 5, notes: a.notes, notionId: a.id }));
