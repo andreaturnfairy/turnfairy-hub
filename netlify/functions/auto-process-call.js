@@ -178,46 +178,101 @@ ${transcript.slice(0, 30000)}`;
     let emailSent = false;
     if (RESEND_KEY && (actionCount > 0 || decisionCount > 0)) {
       try {
-        // Fetch open action items from Notion for the summary
-        const actRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
+        const callDateFmt = new Date(today + 'T12:00:00').toLocaleDateString('en-US', {
+          weekday: 'long', month: 'long', day: 'numeric'
+        });
+        const sourceMeeting = `Weekly Call — ${today}`;
+
+        // Fetch today's decisions
+        const decRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${NOTION_TOKEN}`,
-            'Content-Type': 'application/json',
-            'Notion-Version': '2022-06-28',
-          },
+          headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+          body: JSON.stringify({ filter: { property: 'Date', date: { equals: today } } })
+        });
+        const decData = await decRes.json();
+        const todaysDecisions = (decData.results || []).map(p => ({
+          text: p.properties['Decision']?.title?.[0]?.plain_text || '',
+          decisionMaker: p.properties['Made By']?.select?.name || '',
+          section: p.properties['Section']?.select?.name || '',
+        })).filter(d => d.text);
+
+        // Fetch new action items from today's call
+        const newActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
           body: JSON.stringify({
-            filter: { and: [
-              { property: 'Status', select: { does_not_equal: 'Done' } },
-              { property: 'Status', select: { does_not_equal: 'Archived' } },
-            ]},
-            sorts: [{ timestamp: 'created_time', direction: 'ascending' }]
+            filter: { property: 'Source Meeting', rich_text: { contains: today } }
           })
         });
-        const actData = await actRes.json();
-        const openItems = (actData.results || []).map(p => ({
+        const newActData = await newActRes.json();
+        const newItems = (newActData.results || []).map(p => ({
           task: p.properties['Action Item']?.title?.[0]?.plain_text || '',
           owner: p.properties['Owner']?.select?.name || 'Unassigned',
           priority: p.properties['Priority']?.select?.name || 'Normal',
         })).filter(a => a.task);
 
-        // Build email body
-        const callDateFmt = new Date(today + 'T12:00:00').toLocaleDateString('en-US', {
-          weekday: 'long', month: 'long', day: 'numeric'
+        // Fetch all open items for owner summary
+        const openActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+          body: JSON.stringify({
+            filter: { and: [
+              { property: 'Status', select: { does_not_equal: 'Done' } },
+              { property: 'Status', select: { does_not_equal: 'Archived' } },
+            ]}
+          })
         });
+        const openActData = await openActRes.json();
+        const openItems = (openActData.results || []).map(p => ({
+          task: p.properties['Action Item']?.title?.[0]?.plain_text || '',
+          owner: p.properties['Owner']?.select?.name || 'Unassigned',
+          priority: p.properties['Priority']?.select?.name || 'Normal',
+        })).filter(a => a.task);
 
-        let body = `Hi team,\n\nPost-call summary from the Turnfairy call on ${callDateFmt}.\n\n`;
+        // Build post-call summary email
+        let body = `Hi team,\n\nHere's your post-call summary from the Turnfairy call on ${callDateFmt}.\n\n`;
+        body += `────────────────────────────────\n`;
+        body += `TRANSCRIPT ANALYZED\n`;
+        body += `  ${actionCount} new action items · ${decisionCount} decisions logged\n\n`;
 
-        body += `TRANSCRIPT PROCESSED\n`;
-        body += `  • ${actionCount} new action items added to Notion\n`;
-        body += `  • ${decisionCount} decisions logged\n\n`;
+        // Decisions from today
+        if (todaysDecisions.length) {
+          body += `DECISIONS MADE TODAY\n`;
+          const sections = ['Finance', 'Operations', 'Owners', 'Sales', 'Team', 'Other'];
+          sections.forEach(sec => {
+            const items = todaysDecisions.filter(d => d.section === sec);
+            if (!items.length) return;
+            body += `\n${sec.toUpperCase()}\n`;
+            items.forEach(d => {
+              body += `  • ${d.text}${d.decisionMaker ? ` (${d.decisionMaker})` : ''}\n`;
+            });
+          });
+          body += '\n';
+        }
 
+        // New action items from today
+        if (newItems.length) {
+          body += `NEW ACTION ITEMS FROM TODAY'S CALL\n`;
+          const owners = [...new Set(newItems.map(a => a.owner))].sort();
+          owners.forEach(owner => {
+            const items = newItems.filter(a => a.owner === owner);
+            body += `\n${owner}:\n`;
+            items.forEach(a => {
+              const flag = a.priority === 'Urgent' ? ' 🚨' : a.priority === 'High' ? ' 🟠' : '';
+              body += `  ☐ ${a.task}${flag}\n`;
+            });
+          });
+          body += '\n';
+        }
+
+        // Full open items by owner
         if (openItems.length) {
+          body += `────────────────────────────────\n`;
+          body += `ALL OPEN ITEMS BY OWNER (${openItems.length} total)\n`;
           const owners = [...new Set(openItems.map(a => a.owner))].sort();
-          body += `OPEN ACTION ITEMS BY OWNER (${openItems.length} total)\n`;
           owners.forEach(owner => {
             const items = openItems.filter(a => a.owner === owner);
-            body += `\n${owner} (${items.length}):\n`;
+            body += `\n${owner} (${items.length} open):\n`;
             items.forEach(a => {
               const flag = a.priority === 'Urgent' ? ' 🚨' : '';
               body += `  ☐ ${a.task}${flag}\n`;
@@ -226,7 +281,7 @@ ${transcript.slice(0, 30000)}`;
           body += '\n';
         }
 
-        body += `──────────────────────────────\nView and update in the Hub: ${HUB_URL}`;
+        body += `────────────────────────────────\nUpdate your items: ${HUB_URL}`;
 
         const subject = `Turnfairy Post-Call Summary — ${callDateFmt}`;
 
@@ -243,12 +298,12 @@ ${transcript.slice(0, 30000)}`;
           console.error('Email send failed:', await emailRes.text());
         }
       } catch (emailErr) {
-        console.error('Email error:', emailErr.message);
+        console.error('Post-call email error:', emailErr.message);
       }
     } else if (!RESEND_KEY) {
       console.log('No RESEND_API_KEY — skipping email');
     } else {
-      console.log('No new items processed — skipping email');
+      console.log('No new items processed — skipping post-call email');
     }
 
     return {
