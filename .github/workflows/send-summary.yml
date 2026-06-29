@@ -1,25 +1,19 @@
-name: Send Post-Call Summary
-
+name: Send Post-Call Summary (DISABLED)
+# Disabled — email automation moved to Netlify scheduled functions
+# Trigger post-call summary manually via:
+# https://turnfairy-hub.netlify.app/.netlify/functions/saturday-briefing
 on:
-  workflow_dispatch:  # Manual trigger only — run after transcript is processed
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type ENABLE to re-enable this workflow'
+        required: true
 
 jobs:
-  send-summary:
+  disabled:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Send post-call summary email
-        env:
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          NOTION_KEY: ${{ secrets.NOTION_KEY }}
-          NOTION_DB_ACTIONS: ${{ secrets.NOTION_DB_ACTIONS }}
-          NOTION_DB_DECISIONS: ${{ secrets.NOTION_DB_DECISIONS }}
-          NOTION_DB_AGENDA: ${{ secrets.NOTION_DB_AGENDA }}
-          NOTION_DB_SETTINGS: ${{ secrets.NOTION_DB_SETTINGS }}
-        run: node scripts/email-agent.js --type summary
+      - name: This workflow is disabled
+        run: |
+          echo "Email automation has moved to Netlify scheduled functions."
+          exit 0

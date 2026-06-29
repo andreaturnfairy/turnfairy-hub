@@ -1,28 +1,17 @@
-name: Send Day-Of Agenda
-
+name: Send Day-Of Agenda (DISABLED)
+# Disabled — email automation moved to Netlify scheduled functions (saturday-briefing.js)
 on:
-  schedule:
-    # Every Sunday at 7:00 AM PT (15:00 UTC)
-    - cron: '0 15 * * 0'
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type ENABLE to re-enable this workflow'
+        required: true
 
 jobs:
-  send-agenda:
+  disabled:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Send agenda email
-        env:
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          NOTION_KEY: ${{ secrets.NOTION_KEY }}
-          NOTION_DB_ACTIONS: ${{ secrets.NOTION_DB_ACTIONS }}
-          NOTION_DB_DECISIONS: ${{ secrets.NOTION_DB_DECISIONS }}
-          NOTION_DB_AGENDA: ${{ secrets.NOTION_DB_AGENDA }}
-          NOTION_DB_SETTINGS: ${{ secrets.NOTION_DB_SETTINGS }}
-        run: node scripts/email-agent.js --type agenda
+      - name: This workflow is disabled
+        run: |
+          echo "Email automation has moved to Netlify scheduled functions."
+          exit 0
