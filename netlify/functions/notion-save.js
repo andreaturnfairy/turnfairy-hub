@@ -71,6 +71,19 @@ function buildProps(type, data) {
     if (data.notes           !== undefined) props['Notes']            = txt(data.notes);
     return props;
   }
+  if (type === 'pipeline') {
+    const props = {};
+    if (data.name        !== undefined) props['Lead Name']      = ttl(data.name);
+    if (data.stage       !== undefined) props['Stage']          = sel(data.stage);
+    if (data.owner       !== undefined) props['Owner']          = sel(data.owner);
+    if (data.address     !== undefined) props['Address']        = txt(data.address);
+    if (data.platforms   !== undefined) props['Platforms']      = sel(data.platforms);
+    if (data.notes       !== undefined) props['Notes']          = txt(data.notes);
+    if (data.source      !== undefined) props['Source']         = txt(data.source);
+    if (data.followUpDate !== undefined) props['Follow Up Date'] = dt(data.followUpDate);
+    if (data.lastContact  !== undefined) props['Last Contact']   = dt(data.lastContact);
+    return props;
+  }
   return {};
 }
 

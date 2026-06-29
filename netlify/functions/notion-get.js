@@ -81,6 +81,9 @@ exports.handler = async (event) => {
       notionRequest('POST', `/v1/databases/${DB.decisions}/query`,
         { sorts: [{ property: 'Date', direction: 'descending' }] }),
       notionRequest('POST', `/v1/databases/${process.env.NOTION_DB_SETTINGS}/query`, {}),
+    DB.pipeline ? notionRequest('POST', `/v1/databases/${DB.pipeline}/query`, {
+      sorts: [{ property: 'Stage', direction: 'ascending' }]
+    }) : Promise.resolve({ results: [] }),
     ]);
 
     // Parse settings
@@ -99,6 +102,19 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         settings,
         settingsIds,
+        pipeline: (pipelineRes.results || []).map(p => ({
+          id: p.id,
+          notionId: p.id,
+          name: prop(p, 'Lead Name'),
+          stage: prop(p, 'Stage') || 'New',
+          owner: prop(p, 'Owner') || '',
+          address: prop(p, 'Address') || '',
+          platforms: prop(p, 'Platforms') || '',
+          notes: prop(p, 'Notes') || '',
+          source: prop(p, 'Source') || '',
+          followUpDate: p.properties['Follow Up Date']?.date?.start || '',
+          lastContact: p.properties['Last Contact']?.date?.start || '',
+        })),
         actions: (actRes.results || []).map(p => ({
           id:       p.id,
           notionId: p.id,
