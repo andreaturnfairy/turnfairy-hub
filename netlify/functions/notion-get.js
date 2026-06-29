@@ -84,8 +84,8 @@ exports.handler = async (event) => {
         { sorts: [{ property: 'Date', direction: 'descending' }] }),
       notionRequest('POST', `/v1/databases/${process.env.NOTION_DB_SETTINGS}/query`, {}),
       DB.pipeline ? notionRequest('POST', `/v1/databases/${DB.pipeline}/query`, {
-        sorts: [{ property: 'Stage', direction: 'ascending' }]
-      }) : Promise.resolve({ results: [] }),
+        sorts: [{ timestamp: 'created_time', direction: 'ascending' }]
+      }).catch(() => ({ results: [] })) : Promise.resolve({ results: [] }),
     ]);
 
     // Parse settings
