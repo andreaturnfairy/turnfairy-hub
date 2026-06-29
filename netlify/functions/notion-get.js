@@ -73,7 +73,7 @@ exports.handler = async (event) => {
     // Actions and Agenda items load ALL non-archived items — they persist until deleted
     // Only decisions are capped at 50 most recent
 
-    const [actRes, agRes, decRes, setRes] = await Promise.all([
+    const [actRes, agRes, decRes, setRes, pipelineRes] = await Promise.all([
       notionRequest('POST', `/v1/databases/${DB.actions}/query`,
         { filter: { and: [{ property: 'Status', select: { does_not_equal: 'Done' } }, { property: 'Status', select: { does_not_equal: 'Archived' } }] }, sorts: [{ timestamp: 'created_time', direction: 'ascending' }] }),
       notionRequest('POST', `/v1/databases/${DB.agenda}/query`,
@@ -81,9 +81,9 @@ exports.handler = async (event) => {
       notionRequest('POST', `/v1/databases/${DB.decisions}/query`,
         { sorts: [{ property: 'Date', direction: 'descending' }] }),
       notionRequest('POST', `/v1/databases/${process.env.NOTION_DB_SETTINGS}/query`, {}),
-    DB.pipeline ? notionRequest('POST', `/v1/databases/${DB.pipeline}/query`, {
-      sorts: [{ property: 'Stage', direction: 'ascending' }]
-    }) : Promise.resolve({ results: [] }),
+      DB.pipeline ? notionRequest('POST', `/v1/databases/${DB.pipeline}/query`, {
+        sorts: [{ property: 'Stage', direction: 'ascending' }]
+      }) : Promise.resolve({ results: [] }),
     ]);
 
     // Parse settings
