@@ -25,7 +25,7 @@ const PENNY_EMAIL = process.env.PENNY_EMAIL || 'vapennylaine@gmail.com';
 const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
 const HUB_URL = 'https://turnfairy-hub.netlify.app';
 const PENNY_PORTAL_URL = 'https://turnfairy-hub.netlify.app/penny';
-const { buildHtmlEmail } = require('./email-template');
+const { htmlShell, sectionHeader, subHeader, decisionLine, actionLine, bulletList, paragraph, bold } = require('./email-template');
 
 // ── Helpers ──────────────────────────────────────────────────
 // Fathom's real API base is /external/v1 — see note in
@@ -278,42 +278,41 @@ ${transcript.slice(0, 30000)}`;
           decisionMaker: p.properties['Made By']?.select?.name || '',
         })).filter(d => d.text);
 
-        let body = `Hi team,\n\nHere's the summary from the Penny call on ${callDateFmt}.\n\n`;
-        body += `────────────────────────────────\n`;
-        body += `TRANSCRIPT ANALYZED\n  ${actionCount} new action items · ${decisionCount} decisions logged\n\n`;
+        let html = paragraph(
+          `Hi team,<br><br>` +
+          bold(`Here is the summary from the Penny call on **${callDateFmt}**.`)
+        );
 
-        if (callDecisions.length) {
-          body += `DECISIONS MADE\n`;
-          callDecisions.forEach(d => { body += `  • ${d.text}${d.decisionMaker ? ` (${d.decisionMaker})` : ''}\n`; });
-          body += '\n';
-        }
+        html += paragraph(
+          `<span style="color:#6B5B8A; font-size:13px;">${actionCount} new action items · ${decisionCount} decisions logged</span>`
+        );
 
+        // New action items first — operational content people re-scan.
         if (newItems.length) {
-          body += `NEW ACTION ITEMS FROM THIS CALL\n`;
+          html += sectionHeader('New Action Items From This Call');
           const owners = [...new Set(newItems.map(a => a.owner))].sort();
           owners.forEach(owner => {
-            body += `\n${owner}:\n`;
-            newItems.filter(a => a.owner === owner).forEach(a => {
-              const flag = a.priority === 'Urgent' ? ' 🚨' : a.priority === 'High' ? ' 🟠' : '';
-              body += `  ☐ ${a.task}${flag}\n`;
-            });
+            html += subHeader(owner);
+            html += bulletList(newItems.filter(a => a.owner === owner).map(a => actionLine({ text: a.task, priority: a.priority })));
           });
-          body += '\n';
         }
 
+        // Penny's full open list — single-person list, no owner sub-grouping needed.
         if (pennyOpenItems.length) {
-          body += `────────────────────────────────\n`;
-          body += `PENNY'S FULL OPEN LIST (${pennyOpenItems.length} total)\n`;
-          pennyOpenItems.forEach(a => {
-            const flag = a.priority === 'Urgent' ? ' 🚨' : a.priority === 'High' ? ' 🟠' : '';
-            body += `  ☐ ${a.task}${flag}\n`;
-          });
-          body += '\n';
+          html += sectionHeader(`Pennylaine's Open Items (${pennyOpenItems.length})`);
+          html += bulletList(pennyOpenItems.map(a => actionLine({ text: a.task, priority: a.priority })));
         }
 
-        body += `────────────────────────────────\nPenny's dashboard: ${PENNY_PORTAL_URL}\nManager Hub: ${HUB_URL}`;
+        // Decisions last — closing record, not something to act on.
+        if (callDecisions.length) {
+          html += sectionHeader('Decisions Made');
+          html += bulletList(callDecisions.map(d => decisionLine({ text: d.text, decisionMaker: d.decisionMaker })));
+        }
 
         const subject = `Penny Call Summary — ${callDateFmt}`;
+
+        const htmlBody = htmlShell(html, { linkLabel: "Penny's Dashboard", linkUrl: PENNY_PORTAL_URL });
+        const plainTextFallback = html.replace(/<[^>]+>/g, '').replace(/\n\s*\n/g, '\n').trim();
 
         const emailRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
@@ -322,8 +321,8 @@ ${transcript.slice(0, 30000)}`;
             from: FROM_EMAIL,
             to: [...TEAM_EMAILS, PENNY_EMAIL],
             subject,
-            text: body,
-            html: buildHtmlEmail(body, { linkLabel: "Penny's Dashboard", linkUrl: PENNY_PORTAL_URL })
+            text: plainTextFallback,
+            html: htmlBody
           })
         });
 
@@ -359,6 +358,7 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
 
