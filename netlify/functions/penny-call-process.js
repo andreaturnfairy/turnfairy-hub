@@ -24,9 +24,11 @@ const PENNY_PORTAL_URL = 'https://turnfairy-hub.netlify.app/penny';
 const { buildHtmlEmail } = require('./email-template');
 
 // ── Helpers ──────────────────────────────────────────────────
+// Fathom's real API base is /external/v1 — see note in
+// auto-process-call.js for full explanation of the fix.
 async function fathomGet(path) {
-  const res = await fetch(`https://api.fathom.ai/v1${path}`, {
-    headers: { 'Authorization': `Bearer ${FATHOM_API_KEY}` }
+  const res = await fetch(`https://api.fathom.ai/external/v1${path}`, {
+    headers: { 'X-Api-Key': FATHOM_API_KEY }
   });
   if (!res.ok) throw new Error(`Fathom ${path}: ${res.status} ${await res.text()}`);
   return res.json();
@@ -74,24 +76,21 @@ exports.handler = async (event) => {
     console.log('penny-call-process: starting');
 
     // ── 1. Find most recent Penny call from last 48 hours ─────
-    // Matches Fathom call titles like "Pennylaine & Turnfairy"
-    const calls = await fathomGet('/calls?limit=15');
-    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-    const recent = (calls.data || []).find(c =>
-      c.created_at > cutoff &&
-      /penny|pennylaine/i.test(c.title || '')
-    );
+    // Matches Fathom meeting titles like "Pennylaine & Turnfairy"
+    const cutoffIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    const meetingsRes = await fathomGet(`/meetings?created_after=${encodeURIComponent(cutoffIso)}&include_transcript=true`);
+    const meetings = meetingsRes.items || meetingsRes.data || [];
+    const recent = meetings.find(m => /penny|pennylaine/i.test(m.title || ''));
 
     if (!recent) {
       console.log('No recent Penny call found');
       return { statusCode: 200, body: JSON.stringify({ message: 'No recent Penny call found' }) };
     }
 
-    console.log('Found call:', recent.title, recent.id);
+    console.log('Found call:', recent.title, recent.recording_id);
 
-    // ── 2. Get transcript ─────────────────────────────────────
-    const transcriptData = await fathomGet(`/calls/${recent.id}/transcript`);
-    const transcript = (transcriptData.transcript || [])
+    // ── 2. Build transcript from the meeting's transcript field ──
+    const transcript = (recent.transcript || [])
       .map(s => `${s.speaker}: ${s.text}`)
       .join('\n');
 
@@ -147,7 +146,14 @@ ${transcript.slice(0, 30000)}`;
     const parsed = JSON.parse(jsonStr);
 
     // Use the actual call date from Fathom, not server "today"
-    const callDate = recent.created_at.split('T')[0];
+    // Date field name on the /meetings response wasn't confirmed in the
+    // API spec lookup — try the most likely candidates and log clearly
+    // if none are found, rather than silently failing or guessing wrong.
+    const rawDate = recent.created_at || recent.scheduled_start_time || recent.start_time || recent.recorded_at;
+    if (!rawDate) {
+      console.error('WARNING: could not find a date field on the meeting object. Keys present:', Object.keys(recent).join(', '));
+    }
+    const callDate = (rawDate || new Date().toISOString()).split('T')[0];
     const sourceMeeting = `Penny Call — ${callDate}`;
 
     // ── 4. Fetch existing open items for duplicate check ──────
@@ -346,4 +352,5 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
