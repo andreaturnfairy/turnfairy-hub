@@ -8,9 +8,10 @@
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const PENNY_EMAIL = process.env.PENNY_EMAIL || 'pennylaine@turnfairy.com';
+const PENNY_EMAIL = process.env.PENNY_EMAIL || 'vapennylaine@gmail.com';
 const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
 const PORTAL_URL = 'https://turnfairy-hub.netlify.app/penny';
+const { buildHtmlEmail } = require('./email-template');
 
 async function notionQuery(dbId, filter) {
   const res = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
@@ -113,8 +114,6 @@ Please reply to this email by end of day Wednesday with a status update on each 
     }
 
     body += `──────────────────────────────
-View and update your tasks: ${PORTAL_URL}
-
 A few reminders:
 • Breezeway-first for all maintenance — no WhatsApp-only dispatches
 • Get manager approval before offering any refund or compensation
@@ -139,6 +138,7 @@ Turnfairy Hub`;
           to: [PENNY_EMAIL],
           subject,
           text: body,
+          html: buildHtmlEmail(body, { linkLabel: 'Your Dashboard', linkUrl: PORTAL_URL })
         })
       });
       if (!emailRes.ok) {
@@ -171,3 +171,4 @@ Turnfairy Hub`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
