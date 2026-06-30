@@ -134,8 +134,11 @@ ${transcript.slice(0, 30000)}`;
     const jsonStr = rawText.replace(/```json\n?|\n?```/g, '').trim();
     const parsed = JSON.parse(jsonStr);
 
-    const today = new Date().toISOString().split('T')[0];
-    const sourceMeeting = `Weekly Call — ${today}`;
+    // Use the actual call date from Fathom, not server "today" —
+    // ensures correctness even if this function runs a day late
+    const callDate = recent.created_at.split('T')[0];
+    const today = new Date().toISOString().split('T')[0]; // still used for "Last Contact" etc. on pipeline updates
+    const sourceMeeting = `Weekly Call — ${callDate}`;
 
     // ── 4. Fetch existing open action items for duplicate check ─
     const existingActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
@@ -158,7 +161,7 @@ ${transcript.slice(0, 30000)}`;
     const existingDecRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-      body: JSON.stringify({ filter: { property: 'Date', date: { equals: today } }, page_size: 100 })
+      body: JSON.stringify({ filter: { property: 'Date', date: { equals: callDate } }, page_size: 100 })
     });
     const existingDecData = await existingDecRes.json();
     const existingDecisions = (existingDecData.results || []).map(p =>
@@ -283,7 +286,7 @@ ${transcript.slice(0, 30000)}`;
         'Made By': sel(d.decisionMaker || ''),
         'Context': txt(d.context),
         'Source Meeting': txt(sourceMeeting),
-        'Date': dt(today),
+        'Date': dt(callDate),
         'From Transcript': { checkbox: true },
       });
       decisionCount++;
@@ -292,6 +295,87 @@ ${transcript.slice(0, 30000)}`;
     console.log(`Decisions: ${decisionCount} created, ${decisionSkipped} skipped as duplicates`);
 
     console.log(`Done: ${actionCount} actions, ${decisionCount} decisions`);
+
+    // ── 6c. Advance meeting date + mark discussed agenda items Done ──
+    const NOTION_DB_SETTINGS = process.env.NOTION_DB_SETTINGS;
+    const NOTION_DB_AGENDA = process.env.NOTION_DB_AGENDA;
+    let agendaMarkedDone = 0;
+    let nextMeetingDate = null;
+
+    if (NOTION_DB_SETTINGS) {
+      try {
+        // Compute next Sunday after the call date that was just processed
+        const callDateObj = new Date(callDate + 'T12:00:00');
+        const next = new Date(callDateObj);
+        next.setDate(next.getDate() + 7);
+        nextMeetingDate = next.toISOString().split('T')[0];
+
+        // Find the Settings row for meetingDate
+        const settingsRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_SETTINGS}/query`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+          body: JSON.stringify({ filter: { property: 'Key', title: { equals: 'meetingDate' } } })
+        });
+        const settingsData = await settingsRes.json();
+        const settingsRow = (settingsData.results || [])[0];
+
+        if (settingsRow) {
+          await fetch(`https://api.notion.com/v1/pages/${settingsRow.id}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+            body: JSON.stringify({ properties: { 'Value': { rich_text: [{ text: { content: nextMeetingDate } }] } } })
+          });
+          console.log(`Meeting date advanced: ${callDate} → ${nextMeetingDate}`);
+        } else {
+          console.log('WARNING: no meetingDate row found in Settings — could not advance');
+        }
+      } catch (settingsErr) {
+        console.error('Meeting date advance error:', settingsErr.message);
+      }
+    }
+
+    // Mark agenda items discussed on this call as Done.
+    // We treat any Active agenda item whose topic text overlaps with a decision
+    // or action item logged from this call as "discussed" — same similarity
+    // check used for duplicate detection above.
+    if (NOTION_DB_AGENDA) {
+      try {
+        const agendaRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_AGENDA}/query`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+          body: JSON.stringify({ filter: { property: 'Status', select: { equals: 'Active' } }, page_size: 100 })
+        });
+        const agendaData = await agendaRes.json();
+        const agendaRows = (agendaData.results || []).map(p => ({
+          id: p.id,
+          topic: p.properties['Topic']?.title?.[0]?.plain_text || '',
+        })).filter(a => a.topic);
+
+        const discussedText = [
+          ...(parsed.decisions || []).map(d => d.text),
+          ...(parsed.actionItems || []).map(a => a.task),
+        ].join(' ').toLowerCase();
+
+        for (const row of agendaRows) {
+          const topicWords = row.topic.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+          if (!topicWords.length) continue;
+          const matchedWords = topicWords.filter(w => discussedText.includes(w));
+          const coverage = matchedWords.length / topicWords.length;
+          if (coverage >= 0.5) {
+            await fetch(`https://api.notion.com/v1/pages/${row.id}`, {
+              method: 'PATCH',
+              headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+              body: JSON.stringify({ properties: { 'Status': { select: { name: 'Done' } } } })
+            });
+            agendaMarkedDone++;
+            console.log(`  Agenda marked Done: ${row.topic.slice(0, 60)}`);
+          }
+        }
+        console.log(`Agenda: ${agendaMarkedDone} items marked Done`);
+      } catch (agendaErr) {
+        console.error('Agenda update error:', agendaErr.message);
+      }
+    }
 
     // ── 6. Send post-call summary email via Resend ────────────
     const RESEND_KEY = process.env.RESEND_API_KEY;
@@ -302,16 +386,15 @@ ${transcript.slice(0, 30000)}`;
     let emailSent = false;
     if (RESEND_KEY && (actionCount > 0 || decisionCount > 0)) {
       try {
-        const callDateFmt = new Date(today + 'T12:00:00').toLocaleDateString('en-US', {
+        const callDateFmt = new Date(callDate + 'T12:00:00').toLocaleDateString('en-US', {
           weekday: 'long', month: 'long', day: 'numeric'
         });
-        const sourceMeeting = `Weekly Call — ${today}`;
 
-        // Fetch today's decisions
+        // Fetch this call's decisions
         const decRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-          body: JSON.stringify({ filter: { property: 'Date', date: { equals: today } } })
+          body: JSON.stringify({ filter: { property: 'Date', date: { equals: callDate } } })
         });
         const decData = await decRes.json();
         const todaysDecisions = (decData.results || []).map(p => ({
@@ -320,12 +403,12 @@ ${transcript.slice(0, 30000)}`;
           section: p.properties['Section']?.select?.name || '',
         })).filter(d => d.text);
 
-        // Fetch new action items from today's call
+        // Fetch new action items from this call
         const newActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
           body: JSON.stringify({
-            filter: { property: 'Source Meeting', rich_text: { contains: today } }
+            filter: { property: 'Source Meeting', rich_text: { contains: callDate } }
           })
         });
         const newActData = await newActRes.json();
@@ -357,7 +440,12 @@ ${transcript.slice(0, 30000)}`;
         let body = `Hi team,\n\nHere's your post-call summary from the Turnfairy call on ${callDateFmt}.\n\n`;
         body += `────────────────────────────────\n`;
         body += `TRANSCRIPT ANALYZED\n`;
-        body += `  ${actionCount} new action items · ${decisionCount} decisions logged${pipelineCount > 0 ? ` · ${pipelineCount} pipeline leads updated` : ''}\n\n`;
+        body += `  ${actionCount} new action items · ${decisionCount} decisions logged${pipelineCount > 0 ? ` · ${pipelineCount} pipeline leads updated` : ''}${agendaMarkedDone > 0 ? ` · ${agendaMarkedDone} agenda topics marked discussed` : ''}\n`;
+        if (nextMeetingDate) {
+          const nextFmt = new Date(nextMeetingDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+          body += `  Next meeting advanced to: ${nextFmt}\n`;
+        }
+        body += `\n`;
 
         // Decisions from today
         if (todaysDecisions.length) {
@@ -435,8 +523,11 @@ ${transcript.slice(0, 30000)}`;
       body: JSON.stringify({
         success: true,
         call: recent.title,
+        callDate,
         actionItems: actionCount,
         decisions: decisionCount,
+        agendaMarkedDone,
+        nextMeetingDate,
         emailSent,
       })
     };
@@ -446,3 +537,4 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
