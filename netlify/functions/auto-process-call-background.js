@@ -506,7 +506,7 @@ ${transcript.slice(0, 30000)}`;
 
         // Decisions from today
         if (todaysDecisions.length) {
-          body += `DECISIONS MADE TODAY\n`;
+          body += `DECISIONS MADE — ${callDateFmt}\n`;
           const sections = ['Finance', 'Operations', 'Owners', 'Sales', 'Team', 'Other'];
           sections.forEach(sec => {
             const items = todaysDecisions.filter(d => d.section === sec);
@@ -521,7 +521,7 @@ ${transcript.slice(0, 30000)}`;
 
         // New action items from today
         if (newItems.length) {
-          body += `NEW ACTION ITEMS FROM TODAY'S CALL\n`;
+          body += `NEW ACTION ITEMS — ${callDateFmt} CALL\n`;
           const owners = [...new Set(newItems.map(a => a.owner))].sort();
           owners.forEach(owner => {
             const items = newItems.filter(a => a.owner === owner);
@@ -594,6 +594,7 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
 
