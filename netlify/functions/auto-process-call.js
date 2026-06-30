@@ -14,9 +14,16 @@ const NOTION_DB_DECISIONS = process.env.NOTION_DB_DECISIONS;
 const { buildHtmlEmail } = require('./email-template');
 
 // ── Helpers ──────────────────────────────────────────────────
+// Fathom's real API base is /external/v1 — NOT /v1. The previous
+// version called /v1/calls and /v1/calls/{id}/transcript, neither
+// of which exist on Fathom's side (confirmed via their official
+// OpenAPI spec at developers.fathom.ai). Correct endpoints are
+// /meetings (list, with include_transcript/include_summary/
+// include_action_items as boolean query params) and
+// /recordings/{recording_id}/transcript for standalone fetches.
 async function fathomGet(path) {
-  const res = await fetch(`https://api.fathom.ai/v1${path}`, {
-    headers: { 'Authorization': `Bearer ${FATHOM_API_KEY}` }
+  const res = await fetch(`https://api.fathom.ai/external/v1${path}`, {
+    headers: { 'X-Api-Key': FATHOM_API_KEY }
   });
   if (!res.ok) throw new Error(`Fathom ${path}: ${res.status} ${await res.text()}`);
   return res.json();
@@ -63,21 +70,23 @@ exports.handler = async (event) => {
   try {
     console.log('auto-process-call: starting');
 
-    // ── 1. Find most recent Fathom call from last 48 hours ────
-    const calls = await fathomGet('/calls?limit=10');
-    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-    const recent = (calls.data || []).find(c => c.created_at > cutoff);
+    // ── 1. Find most recent Turnfairy call from last 48 hours ─
+    // Single call to /meetings with include_transcript=true avoids
+    // a second round-trip to fetch the transcript separately.
+    const cutoffIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    const meetingsRes = await fathomGet(`/meetings?created_after=${encodeURIComponent(cutoffIso)}&include_transcript=true`);
+    const meetings = meetingsRes.items || meetingsRes.data || [];
+    const recent = meetings.find(m => !/penny|pennylaine/i.test(m.title || ''));
 
     if (!recent) {
       console.log('No recent Turnfairy call found');
       return { statusCode: 200, body: JSON.stringify({ message: 'No recent call found' }) };
     }
 
-    console.log('Found call:', recent.title, recent.id);
+    console.log('Found call:', recent.title, recent.recording_id);
 
-    // ── 2. Get transcript ─────────────────────────────────────
-    const transcriptData = await fathomGet(`/calls/${recent.id}/transcript`);
-    const transcript = (transcriptData.transcript || [])
+    // ── 2. Build transcript text from the meeting's transcript field ──
+    const transcript = (recent.transcript || [])
       .map(s => `${s.speaker}: ${s.text}`)
       .join('\n');
 
@@ -137,7 +146,14 @@ ${transcript.slice(0, 30000)}`;
 
     // Use the actual call date from Fathom, not server "today" —
     // ensures correctness even if this function runs a day late
-    const callDate = recent.created_at.split('T')[0];
+    // Date field name on the /meetings response wasn't confirmed in the
+    // API spec lookup — try the most likely candidates and log clearly
+    // if none are found, rather than silently failing or guessing wrong.
+    const rawDate = recent.created_at || recent.scheduled_start_time || recent.start_time || recent.recorded_at;
+    if (!rawDate) {
+      console.error('WARNING: could not find a date field on the meeting object. Keys present:', Object.keys(recent).join(', '));
+    }
+    const callDate = (rawDate || new Date().toISOString()).split('T')[0];
     const today = new Date().toISOString().split('T')[0]; // still used for "Last Contact" etc. on pipeline updates
     const sourceMeeting = `Weekly Call — ${callDate}`;
 
@@ -538,5 +554,6 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
