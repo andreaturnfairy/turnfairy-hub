@@ -21,6 +21,7 @@ const PENNY_EMAIL = process.env.PENNY_EMAIL || 'vapennylaine@gmail.com';
 const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
 const HUB_URL = 'https://turnfairy-hub.netlify.app';
 const PENNY_PORTAL_URL = 'https://turnfairy-hub.netlify.app/penny';
+const { buildHtmlEmail } = require('./email-template');
 
 // ── Helpers ──────────────────────────────────────────────────
 async function fathomGet(path) {
@@ -304,7 +305,13 @@ ${transcript.slice(0, 30000)}`;
         const emailRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: FROM_EMAIL, to: [...TEAM_EMAILS, PENNY_EMAIL], subject, text: body })
+          body: JSON.stringify({
+            from: FROM_EMAIL,
+            to: [...TEAM_EMAILS, PENNY_EMAIL],
+            subject,
+            text: body,
+            html: buildHtmlEmail(body, { linkLabel: "Penny's Dashboard", linkUrl: PENNY_PORTAL_URL })
+          })
         });
 
         if (emailRes.ok) {
@@ -339,3 +346,4 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
