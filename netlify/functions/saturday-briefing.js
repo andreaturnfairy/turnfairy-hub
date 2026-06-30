@@ -11,7 +11,7 @@ const NOTION_DB_AGENDA = process.env.NOTION_DB_AGENDA;
 const NOTION_DB_SETTINGS = process.env.NOTION_DB_SETTINGS;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
 const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
-const { buildHtmlEmail } = require('./email-template');
+const { htmlShell, sectionHeader, subHeader, agendaLine, actionLine, bulletList, paragraph, bold, HUB_URL } = require('./email-template');
 
 async function notionQuery(dbId, filter) {
   const body = filter ? { filter, sorts: [{ timestamp: 'created_time', direction: 'ascending' }] } : {};
@@ -121,55 +121,58 @@ exports.handler = async (event) => {
       items: items.filter(i => i.owner === owner)
     })).filter(o => o.items.length > 0);
 
-    // ── 5. Build email body ───────────────────────────────────
-    let body = `Hi team,
+    // ── 5. Build email body as real HTML ──────────────────────
+    let html = paragraph(
+      `Hi team,<br><br>` +
+      bold(`Our weekly Turnfairy call is **${dateFmt}** at **${nvTime}**.`) +
+      ` Please review and update your action items on the <a href="${HUB_URL}" style="color:#603D91;">Manager Hub</a> before the call.`
+    );
 
-Our weekly Turnfairy call is ${dateFmt} at ${nvTime}.
-
-`;
-
-    // Urgent items first
+    // Urgent items first — own section, plain text since these are
+    // time-critical and should stand out without extra visual noise.
     if (urgentItems.length) {
-      body += `🚨 URGENT — NEEDS ATTENTION BEFORE THE CALL\n`;
-      urgentItems.forEach(i => { body += `  • ${i.task} (${i.owner})\n`; });
-      body += '\n';
+      html += sectionHeader('🚨 Needs Attention Before the Call');
+      html += bulletList(urgentItems.map(i => agendaLine({
+        text: i.task, owner: i.owner, withDot: true, priority: 'Urgent'
+      })));
     }
 
-    // Agenda topics
+    // Agenda topics — grouped by section/department, owner inline,
+    // duration suffix. Matches the reference format exactly.
     if (agendaItems.length) {
-      body += `📋 AGENDA TOPICS\n`;
+      html += sectionHeader('Agenda');
       const sections = ['Operations', 'Owners', 'Team', 'Finance', 'Sales', 'Other'];
       sections.forEach(sec => {
         const secItems = agendaItems.filter(i => i.section === sec);
         if (secItems.length) {
-          body += `\n${sec.toUpperCase()}\n`;
-          secItems.forEach(i => { body += `  • ${i.topic}${i.presenter ? ` (${i.presenter})` : ''} — ${i.duration}min\n`; });
+          html += subHeader(sec);
+          html += bulletList(secItems.map(i => agendaLine({
+            text: i.topic, owner: i.presenter, duration: i.duration
+          })));
         }
       });
-      body += '\n';
     }
 
-    // Open items by owner
-    body += `✅ OPEN ACTION ITEMS BY OWNER\n`;
+    // Open action items by owner — status dot per item, count in
+    // the sub-header so each person can see their load at a glance.
+    html += sectionHeader('Open Action Items');
     byOwner.forEach(({ owner, items: ownerItems }) => {
-      body += `\n${owner} (${ownerItems.length} open):\n`;
-      ownerItems.forEach(i => {
-        const urgentFlag = i.priority === 'Urgent' ? ' 🚨' : '';
-        body += `  ☐ ${i.task}${urgentFlag}\n`;
-      });
+      html += subHeader(`${owner} (${ownerItems.length} open)`);
+      html += bulletList(ownerItems.map(i => actionLine({
+        text: i.task, priority: i.priority, due: i.due
+      })));
     });
 
-    body += `\n──────────────────────────────
-Update your items before the call.
-
-See you then,
-Turnfairy Hub`;
+    html += paragraph(`<br>Update your items before the call.<br><br>See you then,<br>Turnfairy Hub`);
 
     const subject = `Turnfairy Weekly Call — ${dateFmt}`;
 
     // ── 6. Send via Resend (or log if no key) ─────────────────
     const RESEND_KEY = process.env.RESEND_API_KEY;
-    const htmlBody = buildHtmlEmail(body);
+    const htmlBody = htmlShell(html);
+    // Plain-text fallback for email clients/spam filters that prefer it —
+    // strips HTML tags rather than maintaining a fully separate plain build.
+    const plainTextFallback = html.replace(/<[^>]+>/g, '').replace(/\n\s*\n/g, '\n').trim();
     if (RESEND_KEY) {
       const emailRes = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -178,7 +181,7 @@ Turnfairy Hub`;
           from: FROM_EMAIL,
           to: TEAM_EMAILS,
           subject,
-          text: body,
+          text: plainTextFallback,
           html: htmlBody,
         })
       });
@@ -198,7 +201,7 @@ Turnfairy Hub`;
       body: JSON.stringify({
         success: true,
         subject,
-        emailBody: body,
+        emailBody: plainTextFallback,
         stats: { openItems: items.length, urgentItems: urgentItems.length, agendaTopics: agendaItems.length },
         sent: !!RESEND_KEY,
       })
@@ -209,6 +212,7 @@ Turnfairy Hub`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
 
