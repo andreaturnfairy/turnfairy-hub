@@ -264,30 +264,24 @@ ${transcript.slice(0, 30000)}`;
         name: (p.properties['Lead Name']?.title?.[0]?.plain_text || '').toLowerCase(),
       }));
 
-      for (const update of parsed.pipelineUpdates) {
+      const pipelineWriteResults = await Promise.allSettled(parsed.pipelineUpdates.map(update => {
         const nameLower = (update.name || '').toLowerCase();
         const existing = existingLeads.find(l => l.name.includes(nameLower) || nameLower.includes(l.name));
 
         if (existing) {
-          // Update existing lead
           const props = {};
           if (update.stage) props['Stage'] = { select: { name: update.stage } };
-          if (update.notes) {
-            // Append to existing notes
-            props['Notes'] = { rich_text: [{ text: { content: `[${today}] ${update.notes}` } }] };
-          }
+          if (update.notes) props['Notes'] = { rich_text: [{ text: { content: `[${today}] ${update.notes}` } }] };
           if (update.followUpDate) props['Follow Up Date'] = { date: { start: update.followUpDate } };
           props['Last Contact'] = { date: { start: today } };
 
-          await fetch(`https://api.notion.com/v1/pages/${existing.id}`, {
+          return fetch(`https://api.notion.com/v1/pages/${existing.id}`, {
             method: 'PATCH',
             headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
             body: JSON.stringify({ properties: props })
-          });
-          console.log(`  Pipeline updated: ${update.name} → ${update.stage}`);
+          }).then(() => console.log(`  Pipeline updated: ${update.name} → ${update.stage}`));
         } else {
-          // Create new lead
-          await notionCreate(NOTION_DB_PIPELINE, {
+          return notionCreate(NOTION_DB_PIPELINE, {
             'Lead Name': { title: [{ text: { content: update.name } }] },
             'Stage': { select: { name: update.stage || 'New' } },
             'Owner': update.owner ? { select: { name: update.owner } } : undefined,
@@ -295,11 +289,13 @@ ${transcript.slice(0, 30000)}`;
             'Follow Up Date': update.followUpDate ? { date: { start: update.followUpDate } } : undefined,
             'Last Contact': { date: { start: today } },
             'Source': { rich_text: [{ text: { content: 'Transcript' } }] },
-          });
-          console.log(`  Pipeline created: ${update.name} (${update.stage || 'New'})`);
+          }).then(() => console.log(`  Pipeline created: ${update.name} (${update.stage || 'New'})`));
         }
-        pipelineCount++;
-      }
+      }));
+      pipelineWriteResults.forEach((r, i) => {
+        if (r.status === 'rejected') console.error(`  FAILED pipeline update for "${parsed.pipelineUpdates[i].name}":`, r.reason.message);
+      });
+      pipelineCount = pipelineWriteResults.filter(r => r.status === 'fulfilled').length;
     }
     console.log(`Pipeline: ${pipelineCount} leads updated`);
 
