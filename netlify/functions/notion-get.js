@@ -104,7 +104,13 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         settings,
         settingsIds,
-        pipeline: (pipelineRes.results || []).map(p => ({
+        pipeline: (() => {
+          if (pipelineRes.object === 'error') {
+            console.error('Pipeline query error:', JSON.stringify(pipelineRes));
+            return [];
+          }
+          return (pipelineRes.results || []);
+        })().map(p => ({
           id: p.id,
           notionId: p.id,
           name: prop(p, 'Lead Name'),
