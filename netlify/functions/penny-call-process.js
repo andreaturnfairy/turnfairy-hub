@@ -139,7 +139,11 @@ ${transcript.slice(0, 30000)}`;
       })
     });
 
-    if (!claudeRes.ok) throw new Error(`Claude API: ${claudeRes.status}`);
+    if (!claudeRes.ok) {
+      const errBody = await claudeRes.text();
+      console.error('Claude API error body:', errBody);
+      throw new Error(`Claude API: ${claudeRes.status} — ${errBody.slice(0, 500)}`);
+    }
     const claudeData = await claudeRes.json();
     const rawText = claudeData.content?.[0]?.text || '';
     const jsonStr = rawText.replace(/```json\n?|\n?```/g, '').trim();
@@ -352,5 +356,6 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
