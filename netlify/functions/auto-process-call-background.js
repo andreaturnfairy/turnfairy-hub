@@ -30,7 +30,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
 const NOTION_DB_DECISIONS = process.env.NOTION_DB_DECISIONS;
-const { buildHtmlEmail } = require('./email-template');
+const { htmlShell, sectionHeader, subHeader, decisionLine, actionLine, bulletList, paragraph, bold, HUB_URL } = require('./email-template');
 
 // ── Helpers ──────────────────────────────────────────────────
 // Fathom's real API base is /external/v1 — NOT /v1. The previous
@@ -436,7 +436,6 @@ ${transcript.slice(0, 30000)}`;
     const RESEND_KEY = process.env.RESEND_API_KEY;
     const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
     const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
-    const HUB_URL = 'https://turnfairy-hub.netlify.app';
 
     let emailSent = false;
     if (RESEND_KEY && (actionCount > 0 || decisionCount > 0)) {
@@ -493,71 +492,76 @@ ${transcript.slice(0, 30000)}`;
           priority: p.properties['Priority']?.select?.name || 'Normal',
         })).filter(a => a.task);
 
-        // Build post-call summary email
-        let body = `Hi team,\n\nHere's your post-call summary from the Turnfairy call on ${callDateFmt}.\n\n`;
-        body += `────────────────────────────────\n`;
-        body += `TRANSCRIPT ANALYZED\n`;
-        body += `  ${actionCount} new action items · ${decisionCount} decisions logged${pipelineCount > 0 ? ` · ${pipelineCount} pipeline leads updated` : ''}${agendaMarkedDone > 0 ? ` · ${agendaMarkedDone} agenda topics marked discussed` : ''}\n`;
-        if (nextMeetingDate) {
-          const nextFmt = new Date(nextMeetingDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-          body += `  Next meeting advanced to: ${nextFmt}\n`;
-        }
-        body += `\n`;
+        // Build post-call summary email as real HTML, matching the
+        // reference format: intro line with bold call date, immediate
+        // next-call-date line, then a leading "Open Action Items (N)"
+        // header with the total count baked into the heading itself.
+        const nextFmt = nextMeetingDate
+          ? new Date(nextMeetingDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+          : null;
 
-        // Decisions from today
+        let html = paragraph(
+          `Hi team,<br><br>` +
+          bold(`Here is the summary from the Turnfairy call on **${callDateFmt}**.`) +
+          ` Update your action items on the <a href="${HUB_URL}" style="color:#603D91;">Manager Hub</a>.` +
+          (nextFmt ? `<br><br>` + bold(`Next call: **${nextFmt}**`) : '')
+        );
+
+        html += paragraph(
+          `<span style="color:#6B5B8A; font-size:13px;">` +
+          `${actionCount} new action items · ${decisionCount} decisions logged` +
+          `${pipelineCount > 0 ? ` · ${pipelineCount} pipeline leads updated` : ''}` +
+          `${agendaMarkedDone > 0 ? ` · ${agendaMarkedDone} agenda topics marked discussed` : ''}` +
+          `</span>`
+        );
+
+        // New action items from this call, grouped by owner — comes
+        // first since this is the operational content people will
+        // re-scan repeatedly while doing the work.
+        if (newItems.length) {
+          html += sectionHeader(`New Action Items — ${callDateFmt} Call`);
+          const newOwners = [...new Set(newItems.map(a => a.owner))].sort();
+          newOwners.forEach(owner => {
+            const ownerItems = newItems.filter(a => a.owner === owner);
+            html += subHeader(owner);
+            html += bulletList(ownerItems.map(a => actionLine({ text: a.task, priority: a.priority })));
+          });
+        }
+
+        // Full open items by owner — leading count in the section
+        // header itself, matching the reference's "Open Action Items (35)".
+        if (openItems.length) {
+          html += sectionHeader(`Open Action Items (${openItems.length})`);
+          const openOwners = [...new Set(openItems.map(a => a.owner))].sort();
+          openOwners.forEach(owner => {
+            const ownerItems = openItems.filter(a => a.owner === owner);
+            html += subHeader(owner);
+            html += bulletList(ownerItems.map(a => actionLine({ text: a.task, priority: a.priority })));
+          });
+        }
+
+        // Decisions from this call — comes last, as a closing record
+        // of what was resolved rather than something to act on.
         if (todaysDecisions.length) {
-          body += `DECISIONS MADE — ${callDateFmt}\n`;
+          html += sectionHeader(`Decisions Made — ${callDateFmt}`);
           const sections = ['Finance', 'Operations', 'Owners', 'Sales', 'Team', 'Other'];
           sections.forEach(sec => {
-            const items = todaysDecisions.filter(d => d.section === sec);
-            if (!items.length) return;
-            body += `\n${sec.toUpperCase()}\n`;
-            items.forEach(d => {
-              body += `  • ${d.text}${d.decisionMaker ? ` (${d.decisionMaker})` : ''}\n`;
-            });
+            const secItems = todaysDecisions.filter(d => d.section === sec);
+            if (!secItems.length) return;
+            html += subHeader(sec);
+            html += bulletList(secItems.map(d => decisionLine({ text: d.text, decisionMaker: d.decisionMaker })));
           });
-          body += '\n';
         }
-
-        // New action items from today
-        if (newItems.length) {
-          body += `NEW ACTION ITEMS — ${callDateFmt} CALL\n`;
-          const owners = [...new Set(newItems.map(a => a.owner))].sort();
-          owners.forEach(owner => {
-            const items = newItems.filter(a => a.owner === owner);
-            body += `\n${owner}:\n`;
-            items.forEach(a => {
-              const flag = a.priority === 'Urgent' ? ' 🚨' : a.priority === 'High' ? ' 🟠' : '';
-              body += `  ☐ ${a.task}${flag}\n`;
-            });
-          });
-          body += '\n';
-        }
-
-        // Full open items by owner
-        if (openItems.length) {
-          body += `────────────────────────────────\n`;
-          body += `ALL OPEN ITEMS BY OWNER (${openItems.length} total)\n`;
-          const owners = [...new Set(openItems.map(a => a.owner))].sort();
-          owners.forEach(owner => {
-            const items = openItems.filter(a => a.owner === owner);
-            body += `\n${owner} (${items.length} open):\n`;
-            items.forEach(a => {
-              const flag = a.priority === 'Urgent' ? ' 🚨' : '';
-              body += `  ☐ ${a.task}${flag}\n`;
-            });
-          });
-          body += '\n';
-        }
-
-        body += `────────────────────────────────\nFull details and updates in the Manager Hub above.`;
 
         const subject = `Turnfairy Post-Call Summary — ${callDateFmt}`;
+
+        const htmlBody = htmlShell(html);
+        const plainTextFallback = html.replace(/<[^>]+>/g, '').replace(/\n\s*\n/g, '\n').trim();
 
         const emailRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: FROM_EMAIL, to: TEAM_EMAILS, subject, text: body, html: buildHtmlEmail(body) })
+          body: JSON.stringify({ from: FROM_EMAIL, to: TEAM_EMAILS, subject, text: plainTextFallback, html: htmlBody })
         });
 
         if (emailRes.ok) {
@@ -594,6 +598,7 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
 
