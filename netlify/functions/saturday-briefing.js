@@ -124,7 +124,7 @@ exports.handler = async (event) => {
     // ── 5. Build email body ───────────────────────────────────
     let body = `Hi team,
 
-Tomorrow is our weekly Turnfairy call — ${dateFmt} at ${nvTime}.
+Our weekly Turnfairy call is ${dateFmt} at ${nvTime}.
 
 `;
 
@@ -162,10 +162,10 @@ Tomorrow is our weekly Turnfairy call — ${dateFmt} at ${nvTime}.
     body += `\n──────────────────────────────
 Update your items before the call.
 
-See you tomorrow,
+See you then,
 Turnfairy Hub`;
 
-    const subject = `Turnfairy Weekly Call Tomorrow — ${dateFmt}`;
+    const subject = `Turnfairy Weekly Call — ${dateFmt}`;
 
     // ── 6. Send via Resend (or log if no key) ─────────────────
     const RESEND_KEY = process.env.RESEND_API_KEY;
@@ -209,5 +209,6 @@ Turnfairy Hub`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
