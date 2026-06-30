@@ -122,7 +122,7 @@ SECTION RULES:
 - Sales: leads, pipeline, new properties, proposals, business development, prospects
 - Other: anything else
 
-PEOPLE: Greg (co-founder, finance/bizdev), Andrea (co-founder, automation/platform), Mike (operations manager, Reno), Lauren (guest/owner satisfaction, Reno), Penny/Pennylaine (VA, remote).
+PEOPLE: Greg (co-founder, finance/bizdev), Andrea (co-founder, automation/platform), Mike (operations manager, Reno), Lauren (guest/owner satisfaction, Reno), Pennylaine (VA, remote — she is sometimes called "Penny" in conversation, but you must always write her name as "Pennylaine" in the owner field, never "Penny").
 
 Return ONLY valid JSON, no other text:
 {
