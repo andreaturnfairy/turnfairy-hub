@@ -9,9 +9,9 @@ const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
 const NOTION_DB_AGENDA = process.env.NOTION_DB_AGENDA;
 const NOTION_DB_SETTINGS = process.env.NOTION_DB_SETTINGS;
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
-const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@thatvacationvibe.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
+const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
+const { buildHtmlEmail } = require('./email-template');
 
 async function notionQuery(dbId, filter) {
   const body = filter ? { filter, sorts: [{ timestamp: 'created_time', direction: 'ascending' }] } : {};
@@ -57,7 +57,6 @@ exports.handler = async (event) => {
       owner: getProp(p.properties, 'Owner'),
       status: getProp(p.properties, 'Status'),
       priority: getProp(p.properties, 'Priority'),
-      section: getProp(p.properties, 'Source Meeting') || 'Other',
       due: getProp(p.properties, 'Due Date'),
     })).filter(i => i.task);
 
@@ -161,8 +160,7 @@ Tomorrow is our weekly Turnfairy call — ${dateFmt} at ${nvTime}.
     });
 
     body += `\n──────────────────────────────
-Update your items before the call: https://turnfairy-hub.netlify.app
-Hub: https://turnfairy-hub.netlify.app
+Update your items before the call.
 
 See you tomorrow,
 Turnfairy Hub`;
@@ -171,6 +169,7 @@ Turnfairy Hub`;
 
     // ── 6. Send via Resend (or log if no key) ─────────────────
     const RESEND_KEY = process.env.RESEND_API_KEY;
+    const htmlBody = buildHtmlEmail(body);
     if (RESEND_KEY) {
       const emailRes = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -180,6 +179,7 @@ Turnfairy Hub`;
           to: TEAM_EMAILS,
           subject,
           text: body,
+          html: htmlBody,
         })
       });
       if (!emailRes.ok) {
@@ -209,4 +209,5 @@ Turnfairy Hub`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
