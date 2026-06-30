@@ -214,7 +214,13 @@ ${transcript.slice(0, 30000)}`;
     }
 
     // ── 5. Push action items to Notion (with duplicate prevention) ─
-    let actionCount = 0;
+    // Duplicate filtering must stay sequential (each new item is checked
+    // against both existing Notion items AND items already accepted in
+    // this same batch). Once the list of unique items to create is known,
+    // fire all the actual Notion writes in parallel — this is the main
+    // latency fix, since 10+ sequential Notion round-trips was a large
+    // contributor to the function exceeding Netlify's timeout.
+    const actionItemsToCreate = [];
     let actionSkipped = 0;
     for (const item of (parsed.actionItems || [])) {
       if (isDuplicateTask(item.task)) {
@@ -222,8 +228,13 @@ ${transcript.slice(0, 30000)}`;
         actionSkipped++;
         continue;
       }
+      actionItemsToCreate.push(item);
+      existingTasks.push(item.task.toLowerCase().trim());
+    }
+
+    const actionResults = await Promise.allSettled(actionItemsToCreate.map(item => {
       const section = item.section && item.section !== 'Other' ? item.section : classifySection(item.task);
-      await notionCreate(NOTION_DB_ACTIONS, {
+      return notionCreate(NOTION_DB_ACTIONS, {
         'Action Item': ttl(item.task),
         'Owner': sel(item.owner),
         'Status': sel('In Progress'),
@@ -231,10 +242,11 @@ ${transcript.slice(0, 30000)}`;
         'Notes': txt(item.notes),
         'Source Meeting': txt(sourceMeeting),
       });
-      actionCount++;
-      // Add to existing list to prevent duplicates within same batch
-      existingTasks.push(item.task.toLowerCase().trim());
-    }
+    }));
+    const actionCount = actionResults.filter(r => r.status === 'fulfilled').length;
+    actionResults.forEach((r, i) => {
+      if (r.status === 'rejected') console.error(`  FAILED to create action item "${actionItemsToCreate[i].task.slice(0,60)}":`, r.reason.message);
+    });
     console.log(`Actions: ${actionCount} created, ${actionSkipped} skipped as duplicates`);
 
     // ── 6b. Update pipeline from transcript ───────────────────
@@ -292,7 +304,7 @@ ${transcript.slice(0, 30000)}`;
     console.log(`Pipeline: ${pipelineCount} leads updated`);
 
     // ── 6. Push decisions to Notion (with duplicate prevention) ──
-    let decisionCount = 0;
+    const decisionsToCreate = [];
     let decisionSkipped = 0;
     for (const d of (parsed.decisions || [])) {
       if (isDuplicateDecision(d.text)) {
@@ -300,8 +312,13 @@ ${transcript.slice(0, 30000)}`;
         decisionSkipped++;
         continue;
       }
+      decisionsToCreate.push(d);
+      existingDecisions.push(d.text.toLowerCase().trim());
+    }
+
+    const decisionResults = await Promise.allSettled(decisionsToCreate.map(d => {
       const section = d.section && d.section !== 'Other' ? d.section : classifySection(d.text);
-      await notionCreate(NOTION_DB_DECISIONS, {
+      return notionCreate(NOTION_DB_DECISIONS, {
         'Decision': ttl(d.text),
         'Section': sel(section),
         'Made By': sel(d.decisionMaker || ''),
@@ -310,9 +327,11 @@ ${transcript.slice(0, 30000)}`;
         'Date': dt(callDate),
         'From Transcript': { checkbox: true },
       });
-      decisionCount++;
-      existingDecisions.push(d.text.toLowerCase().trim());
-    }
+    }));
+    const decisionCount = decisionResults.filter(r => r.status === 'fulfilled').length;
+    decisionResults.forEach((r, i) => {
+      if (r.status === 'rejected') console.error(`  FAILED to create decision "${decisionsToCreate[i].text.slice(0,60)}":`, r.reason.message);
+    });
     console.log(`Decisions: ${decisionCount} created, ${decisionSkipped} skipped as duplicates`);
 
     console.log(`Done: ${actionCount} actions, ${decisionCount} decisions`);
@@ -377,21 +396,25 @@ ${transcript.slice(0, 30000)}`;
           ...(parsed.actionItems || []).map(a => a.task),
         ].join(' ').toLowerCase();
 
-        for (const row of agendaRows) {
+        const rowsToMarkDone = agendaRows.filter(row => {
           const topicWords = row.topic.toLowerCase().split(/\s+/).filter(w => w.length > 4);
-          if (!topicWords.length) continue;
+          if (!topicWords.length) return false;
           const matchedWords = topicWords.filter(w => discussedText.includes(w));
-          const coverage = matchedWords.length / topicWords.length;
-          if (coverage >= 0.5) {
-            await fetch(`https://api.notion.com/v1/pages/${row.id}`, {
-              method: 'PATCH',
-              headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-              body: JSON.stringify({ properties: { 'Status': { select: { name: 'Done' } } } })
-            });
-            agendaMarkedDone++;
-            console.log(`  Agenda marked Done: ${row.topic.slice(0, 60)}`);
-          }
-        }
+          return (matchedWords.length / topicWords.length) >= 0.5;
+        });
+
+        const agendaResults = await Promise.allSettled(rowsToMarkDone.map(row =>
+          fetch(`https://api.notion.com/v1/pages/${row.id}`, {
+            method: 'PATCH',
+            headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+            body: JSON.stringify({ properties: { 'Status': { select: { name: 'Done' } } } })
+          })
+        ));
+        agendaMarkedDone = agendaResults.filter(r => r.status === 'fulfilled').length;
+        rowsToMarkDone.forEach((row, i) => {
+          if (agendaResults[i].status === 'fulfilled') console.log(`  Agenda marked Done: ${row.topic.slice(0, 60)}`);
+          else console.error(`  FAILED to mark agenda Done "${row.topic.slice(0,60)}":`, agendaResults[i].reason.message);
+        });
         console.log(`Agenda: ${agendaMarkedDone} items marked Done`);
       } catch (agendaErr) {
         console.error('Agenda update error:', agendaErr.message);
@@ -558,6 +581,7 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
 
