@@ -8,6 +8,7 @@
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
 const NOTION_DB_AGENDA = process.env.NOTION_DB_AGENDA;
+const NOTION_DB_SETTINGS = process.env.NOTION_DB_SETTINGS;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
 const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@thatvacationvibe.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
@@ -72,9 +73,44 @@ exports.handler = async (event) => {
       duration: p.properties['Duration']?.number || 5,
     })).filter(i => i.topic);
 
-    // ── 3. Get next Sunday date ───────────────────────────────
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    // ── 3. Get the real meeting date from Notion Settings ─────
+    // Previously this blindly computed "tomorrow" as today+1, which meant
+    // the email claimed a call was happening every single day it ran,
+    // regardless of whether one was actually scheduled. Now it reads the
+    // real meetingDate set by auto-process-call.js and only sends if that
+    // date is genuinely tomorrow (server-local).
+    if (!NOTION_DB_SETTINGS) {
+      console.log('NOTION_DB_SETTINGS not configured — cannot verify meeting date, skipping send');
+      return { statusCode: 200, body: JSON.stringify({ skipped: true, reason: 'NOTION_DB_SETTINGS not configured' }) };
+    }
+
+    const settingsRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_SETTINGS}/query`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+      body: JSON.stringify({ filter: { property: 'Key', title: { equals: 'meetingDate' } } })
+    });
+    const settingsData = await settingsRes.json();
+    const meetingDateRow = (settingsData.results || [])[0];
+    const meetingDateValue = meetingDateRow?.properties?.['Value']?.rich_text?.[0]?.plain_text;
+
+    if (!meetingDateValue) {
+      console.log('No meetingDate found in Settings — skipping send');
+      return { statusCode: 200, body: JSON.stringify({ skipped: true, reason: 'No meetingDate set in Settings' }) };
+    }
+
+    const tomorrowCheck = new Date();
+    tomorrowCheck.setDate(tomorrowCheck.getDate() + 1);
+    const tomorrowStr = tomorrowCheck.toISOString().split('T')[0];
+
+    if (meetingDateValue !== tomorrowStr) {
+      console.log(`meetingDate (${meetingDateValue}) is not tomorrow (${tomorrowStr}) — skipping send. No call scheduled tomorrow.`);
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ skipped: true, reason: 'No call scheduled tomorrow', meetingDate: meetingDateValue, tomorrow: tomorrowStr })
+      };
+    }
+
+    const tomorrow = new Date(meetingDateValue + 'T12:00:00');
     const dateFmt = tomorrow.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
     const nvTime = '8:00 AM NV · 5:00 PM Spain';
 
@@ -173,3 +209,4 @@ Turnfairy Hub`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
