@@ -22,3 +22,13 @@
 # NOTE: Will not send until PENNY_EMAIL and RESEND_API_KEY are set in Netlify env vars
 [functions."penny-monday-email"]
   schedule = "0 16 * * 1"
+
+# Penny monthly call processing — MANUALLY TRIGGERED, no schedule.
+# Penny's call cadence is monthly and the date moves around, so this is
+# triggered by hand (or by Claude) shortly after each Penny call ends,
+# the same way the manager weekly call transcript is processed.
+# Trigger: POST or GET to /.netlify/functions/penny-call-process
+# Finds the most recent Fathom call with "Penny"/"Pennylaine" in the title
+# from the last 48 hours, pushes action items + decisions to Notion, and
+# sends a summary email to Penny + the management team.
+
