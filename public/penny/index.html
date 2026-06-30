@@ -183,6 +183,20 @@
 </head>
 <body>
 
+<!-- PIN GATE -->
+<div id="pin-screen" style="position:fixed;inset:0;z-index:999;background:linear-gradient(135deg,var(--purple-dark),var(--purple-mid));display:flex;align-items:center;justify-content:center;padding:24px;">
+  <div style="background:#fff;border-radius:20px;padding:36px 28px;max-width:340px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(43,33,71,.4);">
+    <div style="font-family:'Playfair Display',serif;font-weight:800;font-size:1.4rem;color:var(--purple-dark);margin-bottom:4px;">Turnfairy</div>
+    <div style="font-size:.85rem;color:var(--text-lt);margin-bottom:24px;">Enter your access code</div>
+    <input type="password" id="pin-input" inputmode="numeric" maxlength="4" placeholder="••••"
+      style="width:100%;font-size:1.6rem;text-align:center;letter-spacing:8px;padding:14px;border:2px solid var(--border);border-radius:12px;outline:none;margin-bottom:14px;font-family:'DM Sans',sans-serif;"
+      onkeydown="if(event.key==='Enter')checkPin()">
+    <button onclick="checkPin()" style="width:100%;padding:13px;border:none;border-radius:12px;background:var(--teal-dark);color:#fff;font-weight:700;font-size:.95rem;cursor:pointer;font-family:'DM Sans',sans-serif;">Unlock</button>
+    <div id="pin-error" style="color:var(--urgent);font-size:.8rem;margin-top:12px;display:none;">Incorrect code. Try again.</div>
+  </div>
+</div>
+
+<div id="app-content" style="display:none;">
 <div class="header">
   <div class="header-top">
     <div class="header-brand">
@@ -233,7 +247,37 @@
 
 <div class="toast" id="toast"></div>
 
+</div><!-- /app-content -->
+
 <script>
+const PENNY_PIN = '5163';
+
+function checkPin() {
+  const input = document.getElementById('pin-input');
+  const val = input.value.trim();
+  if (val === PENNY_PIN) {
+    sessionStorage.setItem('tf_penny_authed', '1');
+    unlockApp();
+  } else {
+    document.getElementById('pin-error').style.display = 'block';
+    input.value = '';
+    input.focus();
+  }
+}
+
+function unlockApp() {
+  document.getElementById('pin-screen').style.display = 'none';
+  document.getElementById('app-content').style.display = 'block';
+  init();
+}
+
+// Check for existing session on load
+if (sessionStorage.getItem('tf_penny_authed') === '1') {
+  unlockApp();
+} else {
+  document.getElementById('pin-input').focus();
+}
+
 const API = '/.netlify/functions/notion-get';
 const SAVE_API = '/.netlify/functions/notion-save';
 
@@ -567,7 +611,7 @@ function showToast(msg) {
 }
 
 // ── START ─────────────────────────────────────────────────────
-init();
+// init() is now called from unlockApp() after successful PIN entry
 </script>
 </body>
 </html>
