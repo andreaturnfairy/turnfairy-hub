@@ -113,7 +113,7 @@ SECTION RULES:
 - Finance: invoices, payments, fees
 - Other: anything else
 
-PEOPLE: Greg, Andrea, Mike, Lauren (managers), Pennylaine/Penny (VA, the call's primary subject).
+PEOPLE: Greg, Andrea, Mike, Lauren (managers), Pennylaine (VA, the call's primary subject — she is sometimes called "Penny" in conversation, but you must always write her name as "Pennylaine" in the owner field, never "Penny").
 
 Return ONLY valid JSON, no other text:
 {
@@ -359,6 +359,7 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
 
 
