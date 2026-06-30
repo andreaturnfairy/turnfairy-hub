@@ -1,0 +1,341 @@
+// ─────────────────────────────────────────────────────────────
+// penny-call-process.js
+// Netlify function — analyzes the most recent Penny/Pennylaine
+// Fathom call, pushes her action items to Notion, and sends a
+// post-call summary email to Penny + managers.
+//
+// Unlike auto-process-call.js (manager weekly call, fixed Sunday
+// schedule), this is triggered manually after each Penny call,
+// since her call cadence is monthly and the date moves around.
+// Trigger via POST to /.netlify/functions/penny-call-process
+// ─────────────────────────────────────────────────────────────
+
+const FATHOM_API_KEY = process.env.FATHOM_API_KEY;
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const NOTION_TOKEN = process.env.NOTION_TOKEN;
+const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
+const NOTION_DB_DECISIONS = process.env.NOTION_DB_DECISIONS;
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
+const PENNY_EMAIL = process.env.PENNY_EMAIL || 'vapennylaine@gmail.com';
+const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
+const HUB_URL = 'https://turnfairy-hub.netlify.app';
+const PENNY_PORTAL_URL = 'https://turnfairy-hub.netlify.app/penny';
+
+// ── Helpers ──────────────────────────────────────────────────
+async function fathomGet(path) {
+  const res = await fetch(`https://api.fathom.ai/v1${path}`, {
+    headers: { 'Authorization': `Bearer ${FATHOM_API_KEY}` }
+  });
+  if (!res.ok) throw new Error(`Fathom ${path}: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+async function notionCreate(dbId, props) {
+  const res = await fetch('https://api.notion.com/v1/pages', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${NOTION_TOKEN}`,
+      'Content-Type': 'application/json',
+      'Notion-Version': '2022-06-28',
+    },
+    body: JSON.stringify({ parent: { database_id: dbId }, properties: props })
+  });
+  if (!res.ok) throw new Error(`Notion create: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+function ttl(text) { return { title: [{ text: { content: String(text || '').slice(0, 2000) } }] }; }
+function sel(val) { return val ? { select: { name: String(val) } } : undefined; }
+function txt(val) { return val ? { rich_text: [{ text: { content: String(val).slice(0, 2000) } }] } : undefined; }
+function dt(val) { return val ? { date: { start: val } } : undefined; }
+
+// Similarity check — same logic as auto-process-call.js, used for
+// duplicate prevention against existing open items
+function isSimilar(a, b) {
+  a = a.toLowerCase().trim();
+  b = b.toLowerCase().trim();
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  const wordsA = new Set(a.split(/\s+/).filter(w => w.length > 3));
+  const wordsB = new Set(b.split(/\s+/).filter(w => w.length > 3));
+  if (wordsA.size === 0 || wordsB.size === 0) return false;
+  const overlap = [...wordsA].filter(w => wordsB.has(w)).length;
+  return (overlap / Math.min(wordsA.size, wordsB.size)) >= 0.6;
+}
+
+// ── Main handler ─────────────────────────────────────────────
+exports.handler = async (event) => {
+  const isManual = event.httpMethod === 'POST' || event.httpMethod === 'GET';
+  if (!isManual) return { statusCode: 405, body: 'Method not allowed' };
+
+  try {
+    console.log('penny-call-process: starting');
+
+    // ── 1. Find most recent Penny call from last 48 hours ─────
+    // Matches Fathom call titles like "Pennylaine & Turnfairy"
+    const calls = await fathomGet('/calls?limit=15');
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    const recent = (calls.data || []).find(c =>
+      c.created_at > cutoff &&
+      /penny|pennylaine/i.test(c.title || '')
+    );
+
+    if (!recent) {
+      console.log('No recent Penny call found');
+      return { statusCode: 200, body: JSON.stringify({ message: 'No recent Penny call found' }) };
+    }
+
+    console.log('Found call:', recent.title, recent.id);
+
+    // ── 2. Get transcript ─────────────────────────────────────
+    const transcriptData = await fathomGet(`/calls/${recent.id}/transcript`);
+    const transcript = (transcriptData.transcript || [])
+      .map(s => `${s.speaker}: ${s.text}`)
+      .join('\n');
+
+    if (!transcript || transcript.length < 100) {
+      return { statusCode: 200, body: JSON.stringify({ message: 'Transcript too short or not ready' }) };
+    }
+
+    // ── 3. Analyze with Claude ────────────────────────────────
+    const prompt = `You are analyzing a Turnfairy STR co-hosting company monthly call between management (Mike, Lauren, and sometimes Greg/Andrea) and Pennylaine ("Penny"), their remote VA.
+
+This call is specifically about Penny's tasks, operations, and dashboard. Extract ALL action items and decisions discussed. Be thorough — capture everything, even small tasks. Most action items will be assigned TO Penny, but some may be assigned to managers (e.g. "Mike to follow up with Penny on X").
+
+SECTION RULES:
+- Operations: cleaning, maintenance, vendors, Breezeway, Hostaway, lock codes, Ronaldo, linen, check-in/out, cleaners
+- Owners: owner names (Rachel, Kathy, Roberto, Nick, Stacey, Josephine etc), property decisions, owner invoices
+- Team: Penny's own workflow, SOPs, dashboard/portal feedback, training
+- Finance: invoices, payments, fees
+- Other: anything else
+
+PEOPLE: Greg, Andrea, Mike, Lauren (managers), Pennylaine/Penny (VA, the call's primary subject).
+
+Return ONLY valid JSON, no other text:
+{
+  "actionItems": [
+    { "task": "specific actionable task", "owner": "Pennylaine, or Mike/Lauren/Greg/Andrea first name", "section": "section", "priority": "Urgent|High|Normal", "notes": "context if needed" }
+  ],
+  "decisions": [
+    { "text": "what was decided", "section": "section", "decisionMaker": "first name or empty string", "context": "why this was decided" }
+  ]
+}
+
+TRANSCRIPT:
+${transcript.slice(0, 30000)}`;
+
+    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    if (!claudeRes.ok) throw new Error(`Claude API: ${claudeRes.status}`);
+    const claudeData = await claudeRes.json();
+    const rawText = claudeData.content?.[0]?.text || '';
+    const jsonStr = rawText.replace(/```json\n?|\n?```/g, '').trim();
+    const parsed = JSON.parse(jsonStr);
+
+    // Use the actual call date from Fathom, not server "today"
+    const callDate = recent.created_at.split('T')[0];
+    const sourceMeeting = `Penny Call — ${callDate}`;
+
+    // ── 4. Fetch existing open items for duplicate check ──────
+    const existingActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+      body: JSON.stringify({
+        filter: { and: [
+          { property: 'Status', select: { does_not_equal: 'Done' } },
+          { property: 'Status', select: { does_not_equal: 'Archived' } },
+        ]},
+        page_size: 100
+      })
+    });
+    const existingActData = await existingActRes.json();
+    const existingTasks = (existingActData.results || []).map(p =>
+      (p.properties['Action Item']?.title?.[0]?.plain_text || '').toLowerCase().trim()
+    ).filter(Boolean);
+
+    const existingDecRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+      body: JSON.stringify({ filter: { property: 'Date', date: { equals: callDate } }, page_size: 100 })
+    });
+    const existingDecData = await existingDecRes.json();
+    const existingDecisions = (existingDecData.results || []).map(p =>
+      (p.properties['Decision']?.title?.[0]?.plain_text || '').toLowerCase().trim()
+    ).filter(Boolean);
+
+    function isDuplicateTask(task) { return existingTasks.some(e => isSimilar(task, e)); }
+    function isDuplicateDecision(text) { return existingDecisions.some(e => isSimilar(text, e)); }
+
+    // ── 5. Push action items to Notion ────────────────────────
+    let actionCount = 0, actionSkipped = 0;
+    for (const item of (parsed.actionItems || [])) {
+      if (isDuplicateTask(item.task)) { actionSkipped++; continue; }
+      await notionCreate(NOTION_DB_ACTIONS, {
+        'Action Item': ttl(item.task),
+        'Owner': sel(item.owner),
+        'Status': sel('In Progress'),
+        'Priority': sel(item.priority || 'Normal'),
+        'Notes': txt(item.notes),
+        'Source Meeting': txt(sourceMeeting),
+      });
+      actionCount++;
+      existingTasks.push(item.task.toLowerCase().trim());
+    }
+    console.log(`Actions: ${actionCount} created, ${actionSkipped} skipped as duplicates`);
+
+    // ── 6. Push decisions to Notion ───────────────────────────
+    let decisionCount = 0, decisionSkipped = 0;
+    for (const d of (parsed.decisions || [])) {
+      if (isDuplicateDecision(d.text)) { decisionSkipped++; continue; }
+      await notionCreate(NOTION_DB_DECISIONS, {
+        'Decision': ttl(d.text),
+        'Section': sel(d.section || 'Team'),
+        'Made By': sel(d.decisionMaker || ''),
+        'Context': txt(d.context),
+        'Source Meeting': txt(sourceMeeting),
+        'Date': dt(callDate),
+        'From Transcript': { checkbox: true },
+      });
+      decisionCount++;
+      existingDecisions.push(d.text.toLowerCase().trim());
+    }
+    console.log(`Decisions: ${decisionCount} created, ${decisionSkipped} skipped as duplicates`);
+
+    // ── 7. Send post-call summary email ───────────────────────
+    let emailSent = false;
+    if (RESEND_API_KEY && (actionCount > 0 || decisionCount > 0)) {
+      try {
+        const callDateFmt = new Date(callDate + 'T12:00:00').toLocaleDateString('en-US', {
+          weekday: 'long', month: 'long', day: 'numeric'
+        });
+
+        // Fetch Penny's current full open task list for the summary
+        const pennyActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+          body: JSON.stringify({
+            filter: { and: [
+              { property: 'Owner', select: { equals: 'Pennylaine' } },
+              { property: 'Status', select: { does_not_equal: 'Done' } },
+              { property: 'Status', select: { does_not_equal: 'Archived' } },
+            ]}
+          })
+        });
+        const pennyActData = await pennyActRes.json();
+        const pennyOpenItems = (pennyActData.results || []).map(p => ({
+          task: p.properties['Action Item']?.title?.[0]?.plain_text || '',
+          priority: p.properties['Priority']?.select?.name || 'Normal',
+        })).filter(a => a.task);
+
+        // New items from this call, grouped by owner (Penny vs managers)
+        const newActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+          body: JSON.stringify({ filter: { property: 'Source Meeting', rich_text: { contains: callDate } } })
+        });
+        const newActData = await newActRes.json();
+        const newItems = (newActData.results || []).map(p => ({
+          task: p.properties['Action Item']?.title?.[0]?.plain_text || '',
+          owner: p.properties['Owner']?.select?.name || 'Unassigned',
+          priority: p.properties['Priority']?.select?.name || 'Normal',
+        })).filter(a => a.task);
+
+        const decRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
+          body: JSON.stringify({ filter: { property: 'Date', date: { equals: callDate } } })
+        });
+        const decData = await decRes.json();
+        const callDecisions = (decData.results || []).map(p => ({
+          text: p.properties['Decision']?.title?.[0]?.plain_text || '',
+          decisionMaker: p.properties['Made By']?.select?.name || '',
+        })).filter(d => d.text);
+
+        let body = `Hi team,\n\nHere's the summary from the Penny call on ${callDateFmt}.\n\n`;
+        body += `────────────────────────────────\n`;
+        body += `TRANSCRIPT ANALYZED\n  ${actionCount} new action items · ${decisionCount} decisions logged\n\n`;
+
+        if (callDecisions.length) {
+          body += `DECISIONS MADE\n`;
+          callDecisions.forEach(d => { body += `  • ${d.text}${d.decisionMaker ? ` (${d.decisionMaker})` : ''}\n`; });
+          body += '\n';
+        }
+
+        if (newItems.length) {
+          body += `NEW ACTION ITEMS FROM THIS CALL\n`;
+          const owners = [...new Set(newItems.map(a => a.owner))].sort();
+          owners.forEach(owner => {
+            body += `\n${owner}:\n`;
+            newItems.filter(a => a.owner === owner).forEach(a => {
+              const flag = a.priority === 'Urgent' ? ' 🚨' : a.priority === 'High' ? ' 🟠' : '';
+              body += `  ☐ ${a.task}${flag}\n`;
+            });
+          });
+          body += '\n';
+        }
+
+        if (pennyOpenItems.length) {
+          body += `────────────────────────────────\n`;
+          body += `PENNY'S FULL OPEN LIST (${pennyOpenItems.length} total)\n`;
+          pennyOpenItems.forEach(a => {
+            const flag = a.priority === 'Urgent' ? ' 🚨' : a.priority === 'High' ? ' 🟠' : '';
+            body += `  ☐ ${a.task}${flag}\n`;
+          });
+          body += '\n';
+        }
+
+        body += `────────────────────────────────\nPenny's dashboard: ${PENNY_PORTAL_URL}\nManager Hub: ${HUB_URL}`;
+
+        const subject = `Penny Call Summary — ${callDateFmt}`;
+
+        const emailRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: FROM_EMAIL, to: [...TEAM_EMAILS, PENNY_EMAIL], subject, text: body })
+        });
+
+        if (emailRes.ok) {
+          emailSent = true;
+          console.log('✓ Penny call summary email sent');
+        } else {
+          console.error('Email send failed:', await emailRes.text());
+        }
+      } catch (emailErr) {
+        console.error('Penny call email error:', emailErr.message);
+      }
+    } else if (!RESEND_API_KEY) {
+      console.log('No RESEND_API_KEY — skipping email');
+    } else {
+      console.log('No new items processed — skipping summary email');
+    }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        success: true,
+        call: recent.title,
+        callDate,
+        actionItems: actionCount,
+        decisions: decisionCount,
+        emailSent,
+      })
+    };
+
+  } catch (err) {
+    console.error('penny-call-process error:', err);
+    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
+  }
+};
