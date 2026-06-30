@@ -11,6 +11,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
 const NOTION_DB_DECISIONS = process.env.NOTION_DB_DECISIONS;
+const { buildHtmlEmail } = require('./email-template');
 
 // ── Helpers ──────────────────────────────────────────────────
 async function fathomGet(path) {
@@ -493,14 +494,14 @@ ${transcript.slice(0, 30000)}`;
           body += '\n';
         }
 
-        body += `────────────────────────────────\nUpdate your items: ${HUB_URL}`;
+        body += `────────────────────────────────\nFull details and updates in the Manager Hub above.`;
 
         const subject = `Turnfairy Post-Call Summary — ${callDateFmt}`;
 
         const emailRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: FROM_EMAIL, to: TEAM_EMAILS, subject, text: body })
+          body: JSON.stringify({ from: FROM_EMAIL, to: TEAM_EMAILS, subject, text: body, html: buildHtmlEmail(body) })
         });
 
         if (emailRes.ok) {
@@ -537,4 +538,5 @@ ${transcript.slice(0, 30000)}`;
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };
+
 
