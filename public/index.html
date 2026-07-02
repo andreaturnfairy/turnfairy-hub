@@ -743,7 +743,11 @@ const API_BASE = window.location.hostname === 'localhost' || window.location.hos
   ? 'http://localhost:8888/.netlify/functions'
   : '/.netlify/functions';
 
-let currentUser = localStorage.getItem('tf_user') || null;
+// Always require PIN on fresh page load — don't auto-login from localStorage
+let currentUser = null;
+// Remember last user for name pre-selection only (not auto-login)
+const _lastUser = localStorage.getItem('tf_user') || null;
+localStorage.removeItem('tf_user');
 
 // ═══════════════════════════════════════
 // INIT
