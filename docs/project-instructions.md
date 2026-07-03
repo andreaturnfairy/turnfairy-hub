@@ -99,6 +99,7 @@ When helping with agent builds: Greg owns Finance/BizDev agents (Franklin, Scout
 | Meeting Archive | `b0ebe03e-c7eb-4300-8bae-3a682b715407` | — |
 | Agenda Items | `7ca87ac8-c456-411c-8175-6d4a6dbf3fa9` | `2fa7593a-2cf8-4044-9c3f-2197b49aeb7f` |
 | Settings | `ae9b764e-3590-4e7e-aa34-5cf5ae4db973` | `1bbb7a3a-2ac3-40c1-8914-3fd3b3d74609` |
+| Pipeline | `d508ea8b-e67e-4cc8-b737-a83e626256bf` | `ca244378-d8be-4b02-96bb-9102a460cc0b` |
 
 ---
 
@@ -459,11 +460,16 @@ Deployed at **turnfairy-hub.netlify.app**. GitHub repo: **andreaturnfairy/turnfa
 - `TEAM_EMAILS` — `greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com`
 - `PENNY_EMAIL` — `vapennylaine@gmail.com`
 - `FROM_EMAIL` — `hub@turnfairy.com`
+- `NOTION_DB_PIPELINE` — `d508ea8b-e67e-4cc8-b737-a83e626256bf` (the PAGE ID, not the data source ID)
 
 **Automated scheduled functions:**
 - Saturday 9am PT — `saturday-briefing` — pre-call briefing email to team
-- Sunday 11am PT — `auto-process-call` — Fathom transcript → Notion action items + decisions
-- Monday 8am PT — `penny-monday-email` — Penny's weekly task list email (built, not yet sending — needs RESEND_API_KEY)
+- Sunday 11am PT — `auto-process-call` → triggers `auto-process-call-background` (15min background function) → Fathom transcript → Notion action items + decisions + pipeline updates + post-call summary email
+- Monday 8am PT — `penny-monday-email` — Penny's weekly task list email
+- `penny-call-process` → triggers `penny-call-process-background` — for Penny calls (separate from weekly)
+
+**All Netlify functions:**
+`notion-get`, `notion-save`, `notion-delete`, `notion-setup`, `fathom-get`, `analyze-transcript`, `auto-process-call`, `auto-process-call-background`, `email-template`, `penny-call-process`, `penny-call-process-background`, `penny-monday-email`, `saturday-briefing` (built, not yet sending — needs RESEND_API_KEY)
 
 **PIN codes (stored in Notion Settings):**
 - Greg: 1846 · Andrea: 2035 · Mike: 3721 · Lauren: 4892 · Penny: 5163
@@ -474,7 +480,7 @@ Deployed at **turnfairy-hub.netlify.app**. GitHub repo: **andreaturnfairy/turnfa
 3. Push back to GitHub via API — Netlify auto-deploys in ~15 seconds
 4. Never assume `/home/claude/` has the current version — always pull from GitHub first
 
-**GitHub token:** `[stored in password manager]` (andreaturnfairy account)
+**GitHub token:** `[stored in OneDrive _Shared Resources/Passwords & Access/Github-Token.txt]` (andreaturnfairy account)
 
 ---
 
@@ -634,6 +640,8 @@ To trigger manually: POST to turnfairy-hub.netlify.app/.netlify/functions/auto-p
 
 **TVV LLC:** Greg and Andrea's company owning RSR, 9th St, 13th St properties. Two contracts drafted for Turnfairy to formally manage TVV: Co-Hosting Services Agreement (backdated Dec 1 2025) and Professional Services Agreement (July 25 2026). Signing at July 25 in-person meeting. NV manager designation (Mike or Lauren) still to be confirmed.
 
+**TVV Management Portal:** Built as React JSX artifact (`tvv-management-portal.jsx`). Purpose: quarterly governance meetings for TVV LLC, creating paper trail for Spanish tax residency (US-based place of effective management). Needs to be deployed to Netlify before July 25. File should be saved to OneDrive at `/Turnfairy/05 Technology & AI/02 Owner Portal/tvv-management-portal.jsx`. Continue development in this project (not the TVV chat). Two contracts drafted for Turnfairy to formally manage TVV: Co-Hosting Services Agreement (backdated Dec 1 2025) and Professional Services Agreement (July 25 2026). Signing at July 25 in-person meeting. NV manager designation (Mike or Lauren) still to be confirmed.
+
 ---
 
 ## Critical Development Lessons (from Misfit Island Hub + Turnfairy builds)
@@ -641,6 +649,10 @@ To trigger manually: POST to turnfairy-hub.netlify.app/.netlify/functions/auto-p
 These are hard-won lessons that prevent common bugs. Read before writing any code.
 
 **Notion API:**
+- **CRITICAL: Database ID vs Data Source ID are different.** Notion's MCP search/fetch returns a data source ID (used for SQL-style queries via `notion-query-data-sources`). The standard REST API endpoint `/v1/databases/{id}/query` needs the actual page/database ID instead. Always verify with `notion-search` which returns the correct page ID under `id` — the data source ID format looks similar but will 404 against the REST API.
+- Notion integration tokens can be either `secret_` (older) or `ntn_` (newer) format — both work with the API, this isn't the issue if you see "API token is invalid"
+- Notion databases must be created in the correct shared workspace — if a database ends up in someone's private space, the team's integration won't have access even if "Content access" shows it listed
+- Function env var names must match exactly — using `NOTION_TOKEN` in Netlify but `NOTION_KEY` in code (or vice versa) causes silent "API token is invalid" failures
 - All Notion writes must go through `/.netlify/functions/notion-save` — direct Notion API calls are blocked by CORS from the browser
 - Owner/select field values must be **Title Case** matching Notion select options exactly (e.g. "In Progress" not "in progress", "Pennylaine" not "pennylaine")
 - When injecting JS via browser MCP, use unique variable names per execution — `actionList`, `decisionList` not `actions`, `decisions` — to avoid re-declaration errors
