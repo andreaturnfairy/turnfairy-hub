@@ -1,0 +1,33 @@
+name: Check New Listings
+
+on:
+  schedule:
+    # Daily at 6am PT (14:00 UTC)
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+    # Allow manual trigger from GitHub Actions UI
+
+jobs:
+  check-listings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger check-new-listings function
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "https://okynsldnwcushwlsgecy.supabase.co/functions/v1/check-new-listings" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json")
+          
+          body=$(echo "$response" | head -n -1)
+          status=$(echo "$response" | tail -n 1)
+          
+          echo "HTTP Status: $status"
+          echo "Response: $body"
+          
+          if [ "$status" != "200" ]; then
+            echo "Function call failed with status $status"
+            exit 1
+          fi
+          
+          new_listings=$(echo "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('newListings', 0))")
+          echo "New listings found: $new_listings"
