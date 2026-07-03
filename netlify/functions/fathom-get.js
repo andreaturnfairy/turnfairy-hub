@@ -5,11 +5,11 @@ const FATHOM_API_KEY = process.env.FATHOM_API_KEY;
 function fathomRequest(path) {
   return new Promise((resolve, reject) => {
     const options = {
-      hostname: 'api.fathom.video',
-      path: path,
+      hostname: 'api.fathom.ai',
+      path: `/external/v1${path}`,
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${FATHOM_API_KEY}`,
+        'X-Api-Key': FATHOM_API_KEY,
         'Content-Type': 'application/json',
       },
     };
