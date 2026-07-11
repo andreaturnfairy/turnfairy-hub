@@ -13,6 +13,15 @@ const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
 const PORTAL_URL = 'https://turnfairy-hub.netlify.app/penny';
 const { buildHtmlEmail } = require('./email-template');
 
+// Internal-only client scope: Turnfairy rows plus legacy/untagged rows.
+// AND this into every DB read so client (TVV) rows never surface internally.
+const INTERNAL = {
+  or: [
+    { property: 'Client', select: { equals: 'Turnfairy' } },
+    { property: 'Client', select: { is_empty: true } }
+  ]
+};
+
 async function notionQuery(dbId, filter) {
   const res = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
     method: 'POST',
@@ -52,6 +61,7 @@ exports.handler = async (event) => {
         { property: 'Owner', select: { equals: 'Pennylaine' } },
         { property: 'Status', select: { does_not_equal: 'Done' } },
         { property: 'Status', select: { does_not_equal: 'Archived' } },
+        INTERNAL
       ]
     });
 
