@@ -27,6 +27,17 @@ const DB_DECISIONS   = process.env.NOTION_DB_DECISIONS;
 const DB_AGENDA      = process.env.NOTION_DB_AGENDA;
 const DB_SETTINGS    = process.env.NOTION_DB_SETTINGS;
 
+// Internal-only client scope: Turnfairy rows plus legacy/untagged rows
+// (untagged treated as Turnfairy by convention). AND this into Actions/Agenda/
+// Decisions reads so client (TVV) rows never reach the internal team emails.
+// Settings has no Client field, so its query is left unfiltered.
+const INTERNAL = {
+  or: [
+    { property: 'Client', select: { equals: 'Turnfairy' } },
+    { property: 'Client', select: { is_empty: true } }
+  ]
+};
+
 const TEAM_EMAILS = [
   'greg@turnfairy.com',
   'andrea@turnfairy.com',
@@ -119,12 +130,16 @@ async function fetchNotionData() {
       and: [
         { property: 'Status', select: { does_not_equal: 'Done' } },
         { property: 'Status', select: { does_not_equal: 'Archived' } },
+        INTERNAL
       ]
     }),
     notionQuery(DB_AGENDA, {
-      property: 'Status', select: { does_not_equal: 'Done' }
+      and: [
+        { property: 'Status', select: { does_not_equal: 'Done' } },
+        INTERNAL
+      ]
     }),
-    notionQuery(DB_DECISIONS, {}),
+    notionQuery(DB_DECISIONS, INTERNAL),
     notionQuery(DB_SETTINGS, {}),
   ]);
 
