@@ -19,6 +19,15 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
 const NOTION_DB_DECISIONS = process.env.NOTION_DB_DECISIONS;
+// Internal-only client scope: Turnfairy rows plus legacy/untagged rows.
+// AND into every client-scoped read so TVV rows never enter Penny-call
+// dedup or the summary email.
+const INTERNAL = {
+  or: [
+    { property: 'Client', select: { equals: 'Turnfairy' } },
+    { property: 'Client', select: { is_empty: true } }
+  ]
+};
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
 const PENNY_EMAIL = process.env.PENNY_EMAIL || 'vapennylaine@gmail.com';
@@ -171,6 +180,7 @@ ${transcript.slice(0, 30000)}`;
         filter: { and: [
           { property: 'Status', select: { does_not_equal: 'Done' } },
           { property: 'Status', select: { does_not_equal: 'Archived' } },
+          INTERNAL
         ]},
         page_size: 100
       })
@@ -183,7 +193,7 @@ ${transcript.slice(0, 30000)}`;
     const existingDecRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-      body: JSON.stringify({ filter: { property: 'Date', date: { equals: callDate } }, page_size: 100 })
+      body: JSON.stringify({ filter: { and: [ { property: 'Date', date: { equals: callDate } }, INTERNAL ] }, page_size: 100 })
     });
     const existingDecData = await existingDecRes.json();
     const existingDecisions = (existingDecData.results || []).map(p =>
@@ -245,6 +255,7 @@ ${transcript.slice(0, 30000)}`;
               { property: 'Owner', select: { equals: 'Pennylaine' } },
               { property: 'Status', select: { does_not_equal: 'Done' } },
               { property: 'Status', select: { does_not_equal: 'Archived' } },
+              INTERNAL
             ]}
           })
         });
@@ -258,7 +269,7 @@ ${transcript.slice(0, 30000)}`;
         const newActRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-          body: JSON.stringify({ filter: { property: 'Source Meeting', rich_text: { contains: callDate } } })
+          body: JSON.stringify({ filter: { and: [ { property: 'Source Meeting', rich_text: { contains: callDate } }, INTERNAL ] } })
         });
         const newActData = await newActRes.json();
         const newItems = (newActData.results || []).map(p => ({
@@ -270,7 +281,7 @@ ${transcript.slice(0, 30000)}`;
         const decRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-          body: JSON.stringify({ filter: { property: 'Date', date: { equals: callDate } } })
+          body: JSON.stringify({ filter: { and: [ { property: 'Date', date: { equals: callDate } }, INTERNAL ] } })
         });
         const decData = await decRes.json();
         const callDecisions = (decData.results || []).map(p => ({
