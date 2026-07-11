@@ -9,6 +9,15 @@ const DB = {
   pipeline:  process.env.NOTION_DB_PIPELINE,
 };
 
+// Internal/weekly tenancy scope: Turnfairy-tagged OR legacy untagged rows
+// (rows created before the Client field existed are treated as Turnfairy).
+// Mirrors the portal's clientFilter('Turnfairy'). Keeps TVV — and any future
+// client's — rows out of the internal weekly agenda/actions/decisions.
+const INTERNAL_FILTER = { or: [
+  { property: 'Client', select: { equals: 'Turnfairy' } },
+  { property: 'Client', select: { is_empty: true } },
+]};
+
 function notionRequest(method, path, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
@@ -77,11 +86,11 @@ exports.handler = async (event) => {
 
     const [actRes, agRes, decRes, setRes, pipelineRes] = await Promise.all([
       notionRequest('POST', `/v1/databases/${DB.actions}/query`,
-        { filter: { and: [{ property: 'Status', select: { does_not_equal: 'Done' } }, { property: 'Status', select: { does_not_equal: 'Archived' } }] }, sorts: [{ timestamp: 'created_time', direction: 'ascending' }] }),
+        { filter: { and: [{ property: 'Status', select: { does_not_equal: 'Done' } }, { property: 'Status', select: { does_not_equal: 'Archived' } }, INTERNAL_FILTER] }, sorts: [{ timestamp: 'created_time', direction: 'ascending' }] }),
       notionRequest('POST', `/v1/databases/${DB.agenda}/query`,
-        { filter: { property: 'Status', select: { does_not_equal: 'Done' } }, sorts: [{ property: 'Section', direction: 'ascending' }, { timestamp: 'created_time', direction: 'ascending' }] }),
+        { filter: { and: [{ property: 'Status', select: { does_not_equal: 'Done' } }, INTERNAL_FILTER] }, sorts: [{ property: 'Section', direction: 'ascending' }, { timestamp: 'created_time', direction: 'ascending' }] }),
       notionRequest('POST', `/v1/databases/${DB.decisions}/query`,
-        { sorts: [{ property: 'Date', direction: 'descending' }] }),
+        { filter: INTERNAL_FILTER, sorts: [{ property: 'Date', direction: 'descending' }] }),
       notionRequest('POST', `/v1/databases/${process.env.NOTION_DB_SETTINGS}/query`, {}),
       DB.pipeline ? notionRequest('POST', `/v1/databases/${DB.pipeline}/query`, {
         sorts: [{ timestamp: 'created_time', direction: 'ascending' }]
