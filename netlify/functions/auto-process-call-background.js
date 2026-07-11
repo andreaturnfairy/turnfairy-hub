@@ -32,6 +32,19 @@ const NOTION_DB_ACTIONS = process.env.NOTION_DB_ACTIONS;
 const NOTION_DB_DECISIONS = process.env.NOTION_DB_DECISIONS;
 const { htmlShell, sectionHeader, subHeader, decisionLine, actionLine, bulletList, paragraph, bold, HUB_URL } = require('./email-template');
 
+// Internal-only client scope: Turnfairy rows plus legacy/untagged rows
+// (untagged treated as Turnfairy by convention). AND this into every
+// client-scoped DB read (Actions / Decisions / Agenda). Dedup reads use it so
+// new internal items are only compared against existing internal items — a TVV
+// row must never suppress a Turnfairy write. NOT applied to the Pipeline or
+// Settings reads: those DBs have no Client property (filtering would error).
+const INTERNAL = {
+  or: [
+    { property: 'Client', select: { equals: 'Turnfairy' } },
+    { property: 'Client', select: { is_empty: true } }
+  ]
+};
+
 // ── Helpers ──────────────────────────────────────────────────
 // Fathom's real API base is /external/v1 — NOT /v1. The previous
 // version called /v1/calls and /v1/calls/{id}/transcript, neither
@@ -184,6 +197,7 @@ ${transcript.slice(0, 30000)}`;
         filter: { and: [
           { property: 'Status', select: { does_not_equal: 'Done' } },
           { property: 'Status', select: { does_not_equal: 'Archived' } },
+          INTERNAL
         ]},
         page_size: 100
       })
@@ -197,7 +211,7 @@ ${transcript.slice(0, 30000)}`;
     const existingDecRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-      body: JSON.stringify({ filter: { property: 'Date', date: { equals: callDate } }, page_size: 100 })
+      body: JSON.stringify({ filter: { and: [ { property: 'Date', date: { equals: callDate } }, INTERNAL ] }, page_size: 100 })
     });
     const existingDecData = await existingDecRes.json();
     const existingDecisions = (existingDecData.results || []).map(p =>
@@ -394,7 +408,7 @@ ${transcript.slice(0, 30000)}`;
         const agendaRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_DB_AGENDA}/query`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-          body: JSON.stringify({ filter: { property: 'Status', select: { equals: 'Active' } }, page_size: 100 })
+          body: JSON.stringify({ filter: { and: [ { property: 'Status', select: { equals: 'Active' } }, INTERNAL ] }, page_size: 100 })
         });
         const agendaData = await agendaRes.json();
         const agendaRows = (agendaData.results || []).map(p => ({
@@ -452,12 +466,12 @@ ${transcript.slice(0, 30000)}`;
           fetch(`https://api.notion.com/v1/databases/${NOTION_DB_DECISIONS}/query`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-            body: JSON.stringify({ filter: { property: 'Date', date: { equals: callDate } } })
+            body: JSON.stringify({ filter: { and: [ { property: 'Date', date: { equals: callDate } }, INTERNAL ] } })
           }),
           fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
-            body: JSON.stringify({ filter: { property: 'Source Meeting', rich_text: { contains: callDate } } })
+            body: JSON.stringify({ filter: { and: [ { property: 'Source Meeting', rich_text: { contains: callDate } }, INTERNAL ] } })
           }),
           fetch(`https://api.notion.com/v1/databases/${NOTION_DB_ACTIONS}/query`, {
             method: 'POST',
@@ -466,6 +480,7 @@ ${transcript.slice(0, 30000)}`;
               filter: { and: [
                 { property: 'Status', select: { does_not_equal: 'Done' } },
                 { property: 'Status', select: { does_not_equal: 'Archived' } },
+                INTERNAL
               ]}
             })
           }),
