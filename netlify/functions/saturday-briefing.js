@@ -13,6 +13,16 @@ const FROM_EMAIL = process.env.FROM_EMAIL || 'hub@turnfairy.com';
 const TEAM_EMAILS = (process.env.TEAM_EMAILS || 'greg@turnfairy.com,andrea@turnfairy.com,mike@turnfairy.com,lauren@turnfairy.com').split(',');
 const { htmlShell, sectionHeader, subHeader, agendaLine, actionLine, bulletList, paragraph, bold, HUB_URL } = require('./email-template');
 
+// Internal-only client scope: Turnfairy rows plus legacy/untagged rows
+// (untagged is treated as Turnfairy by convention). Keeps client (TVV) rows
+// out of the internal weekly briefing. AND this into every DB read.
+const INTERNAL = {
+  or: [
+    { property: 'Client', select: { equals: 'Turnfairy' } },
+    { property: 'Client', select: { is_empty: true } }
+  ]
+};
+
 async function notionQuery(dbId, filter) {
   const body = filter ? { filter, sorts: [{ timestamp: 'created_time', direction: 'ascending' }] } : {};
   const res = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
@@ -48,7 +58,8 @@ exports.handler = async (event) => {
     const actionsData = await notionQuery(NOTION_DB_ACTIONS, {
       and: [
         { property: 'Status', select: { does_not_equal: 'Done' } },
-        { property: 'Status', select: { does_not_equal: 'Archived' } }
+        { property: 'Status', select: { does_not_equal: 'Archived' } },
+        INTERNAL
       ]
     });
 
@@ -62,7 +73,10 @@ exports.handler = async (event) => {
 
     // ── 2. Query agenda items for tomorrow's call ─────────────
     const agendaData = await notionQuery(NOTION_DB_AGENDA, {
-      property: 'Status', select: { does_not_equal: 'Done' }
+      and: [
+        { property: 'Status', select: { does_not_equal: 'Done' } },
+        INTERNAL
+      ]
     });
 
     const agendaItems = (agendaData.results || []).map(p => ({
