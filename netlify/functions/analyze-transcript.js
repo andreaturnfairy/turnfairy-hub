@@ -1,10 +1,23 @@
+// analyze-transcript.js
+//
+// REPAIRED 2026-08-16: was pinned to `claude-sonnet-4-20250514`, which
+// Anthropic RETIRED on 2026-06-15. Requests to a retired model fail, so
+// every analysis from the Transcript tab has errored since that date
+// regardless of anything else. Moved to `claude-sonnet-4-6` (active;
+// retirement not before 2027-02-17), matching the model already used by
+// auto-process-call-background.js.
+//
+// Keep CLAUDE_MODEL in sync across every function that calls Claude.
+
 const https = require('https');
+
+const CLAUDE_MODEL = 'claude-sonnet-4-6';
 
 function anthropicRequest(prompt, maxTokens) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: maxTokens || 2000,
+      model: CLAUDE_MODEL,
+      max_tokens: maxTokens || 8000,
       messages: [{ role: 'user', content: prompt }],
     });
     const options = {
@@ -56,7 +69,7 @@ exports.handler = async (event) => {
       prompt = transcript;
       maxTokens = 800;
     } else {
-      prompt = `You are analyzing a Microsoft Teams meeting transcript from the Turnfairy weekly Sunday manager call.
+      prompt = `You are analyzing a transcript from the Turnfairy weekly Sunday manager call.
 
 Team: Greg (co-founder/finance), Andrea (co-founder/automation), Mike (operations), Lauren (guest experience), Pennylaine (VA).
 Sections: Operations, Owners, Team, Finance, Sales, Other.
@@ -74,8 +87,9 @@ PRIORITY RULES — assign priority based on these criteria:
 - "Normal": internal tasks, follow-ups without hard deadlines, research, reporting, administrative tasks, anything not fitting Urgent or High
 
 DECISION MAKER RULES:
-- Identify who made or announced the decision from context (e.g. "Baji said we're going to...", "we decided..." in Baji's speaking turn = Baji)
+- Identify who made or announced the decision from context (e.g. "Greg said we're going to..." = Greg; "we decided..." inside Greg's speaking turn = Greg)
 - If it's a group consensus with no clear owner, use empty string ""
+- Only ever use a name from the team list above
 
 Extract the following. Return ONLY valid JSON, no markdown, no backticks, no explanation:
 {
@@ -90,8 +104,10 @@ Extract the following. Return ONLY valid JSON, no markdown, no backticks, no exp
 }
 
 Transcript:
-${transcript.slice(0, 70000)}`;
-      maxTokens = 2000;
+${transcript.slice(0, 200000)}`;
+      // Was 2000 — too small for a full weekly call. The model would stop
+      // mid-object and JSON.parse would throw on the truncated response.
+      maxTokens = 8000;
     }
 
     const result = await anthropicRequest(prompt, maxTokens);

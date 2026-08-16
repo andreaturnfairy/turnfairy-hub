@@ -61,6 +61,51 @@ async function fathomGet(path) {
   return res.json();
 }
 
+// ── Call selection: by invitee, never by title ───────────────
+// FIXED 2026-08-16. This used to select with
+//   meetings.find(m => !/penny|pennylaine/i.test(m.title || ''))
+// but EVERY recording in this Fathom account is titled
+// "Impromptu Google Meet Meeting" (verified against the 2026-08-16 and
+// 2026-07-25 calls). So the weekly job matched the first meeting of any
+// kind — including a Penny call — and the Penny job, using the inverse
+// test, matched nothing at all and always reported "no recent call".
+// Penny's attendance is the reliable discriminator.
+const PENNY_EMAIL = (process.env.PENNY_EMAIL || 'vapennylaine@gmail.com').toLowerCase();
+
+function emailsOf(meeting) {
+  const out = [];
+  const push = (v) => { if (v && typeof v === 'string') out.push(v.toLowerCase()); };
+  for (const list of [meeting.calendar_invitees, meeting.invitees, meeting.participants]) {
+    if (Array.isArray(list)) list.forEach(p => push(typeof p === 'string' ? p : (p && (p.email || p.email_address))));
+  }
+  const rb = meeting.recorded_by;
+  if (rb) push(typeof rb === 'string' ? rb : rb.email);
+  return out;
+}
+
+// Invitees are the primary signal, but these are "Impromptu Google Meet"
+// recordings and an impromptu call may have no calendar event at all, in
+// which case calendar_invitees is empty. So fall back to whether Penny
+// actually spoke — the transcript is already in hand from
+// include_transcript=true, so this costs nothing.
+function speakersOf(meeting) {
+  const t = meeting.transcript;
+  if (!Array.isArray(t)) return [];
+  return t.map(s => String(
+    (s && s.speaker && (s.speaker.display_name || s.speaker.name)) || (s && s.speaker) || (s && s.speakerName) || ''
+  ).toLowerCase());
+}
+
+const isPennyCall = (m) =>
+  emailsOf(m).includes(PENNY_EMAIL) ||
+  speakersOf(m).some(n => /penny|pennylaine/.test(n));
+
+// Newest-first; do not trust the API's ordering.
+function sortedByDateDesc(meetings) {
+  const dateOf = (m) => new Date(m.created_at || m.scheduled_start_time || m.start_time || m.recorded_at || 0).getTime();
+  return meetings.slice().sort((a, b) => dateOf(b) - dateOf(a));
+}
+
 async function notionCreate(dbId, props) {
   const res = await fetch('https://api.notion.com/v1/pages', {
     method: 'POST',
@@ -104,7 +149,7 @@ exports.handler = async (event) => {
     const cutoffIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     const meetingsRes = await fathomGet(`/meetings?created_after=${encodeURIComponent(cutoffIso)}&include_transcript=true`);
     const meetings = meetingsRes.items || meetingsRes.data || [];
-    const recent = meetings.find(m => !/penny|pennylaine/i.test(m.title || ''));
+    const recent = sortedByDateDesc(meetings).find(m => !isPennyCall(m));
 
     if (!recent) {
       console.log('No recent Turnfairy call found');
@@ -148,7 +193,7 @@ Return ONLY valid JSON, no other text:
 }
 
 TRANSCRIPT:
-${transcript.slice(0, 30000)}`;
+${transcript.slice(0, 200000)}`;
 
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -159,7 +204,10 @@ ${transcript.slice(0, 30000)}`;
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 4000,
+        // Raised from 4000 on 2026-08-16. A full weekly call asked to
+        // return "ALL action items and decisions" can exceed 4000 output
+        // tokens; the JSON then stops mid-object and JSON.parse throws.
+        max_tokens: 16000,
         messages: [{ role: 'user', content: prompt }]
       })
     });
