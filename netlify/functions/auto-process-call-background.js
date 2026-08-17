@@ -189,8 +189,39 @@ Return ONLY valid JSON, no other text:
   ],
   "decisions": [
     { "text": "what was decided", "section": "section", "decisionMaker": "first name or empty string", "context": "why this was decided" }
+  ],
+  "pipelineUpdates": [
+    { "name": "lead or prospect name", "stage": "New|Contacted|Follow-up|Proposal Sent|In Negotiation|On Hold", "owner": "Greg|Andrea|Mike|Lauren", "notes": "what happened on this call", "followUpDate": "YYYY-MM-DD or empty string" }
   ]
 }
+
+PIPELINE RULES — read all of these before emitting any pipelineUpdates.
+
+The pipeline tracks PROSPECTIVE NEW CO-HOSTING CLIENTS ONLY. It is a sales pipeline, not a
+customer list.
+
+1. NEVER add an existing Turnfairy owner as a lead. Current owners are NOT leads even when
+   the call is full of activity about them. As of 2026-08-16 the existing owners are:
+   Steven Brockway / Alex Ficco (Hatch, Liberty Parlour, Liberty Sierra Sunrise),
+   Mike & Lauren Sgandurra (Pine 201, Pine 203, Roberts), Rachel Satoh, Katherine "Kathy" Tan,
+   Roberto Carral, Nicholas "Nick" First, Stacy (Midtown Lux), Gardner Hensill,
+   and Greg & Andrea themselves (RSR, 9th St, 13th St / TVV).
+   An existing owner buying more properties is NOT a pipeline lead until there is a SPECIFIC
+   new property under discussion. "Interested in acquiring more" is not a lead — it is an
+   action item or a decision. Gardner Hensill is the live example: he is an existing customer,
+   was deliberately closed off the pipeline, and must not be re-added on the strength of
+   general interest.
+2. A lead needs a NAMED PARTY and a real prospect signal — an enquiry, a referral, a specific
+   property, a proposal, a scheduled call. A name mentioned in passing is not a lead.
+3. Emit a stage-move for an existing lead that was genuinely WORKED on this call, even if it
+   already exists. A lead left at "New" while a proposal is being drafted should move to
+   "Contacted". Catch stale stages, not just new names.
+4. NEVER emit a terminal stage. Do not emit "Won", "Closed Won" or "Lost" — closing or losing
+   a lead is a human judgement, and the code will refuse them anyway.
+5. If the call mentions a lead that is already closed or lost, DO NOT emit an update for it.
+   Say what happened in a decision or action item instead.
+6. If nothing in the transcript meets this bar, return an empty array. An empty pipeline is a
+   valid and common outcome — inventing leads to look thorough is worse than returning none.
 
 TRANSCRIPT:
 ${transcript.slice(0, 200000)}`;
@@ -338,41 +369,114 @@ ${transcript.slice(0, 200000)}`;
       const pipelineData = await pipelineRes.json();
       const existingLeads = (pipelineData.results || []).map(p => ({
         id: p.id,
+        rawName: p.properties['Lead Name']?.title?.[0]?.plain_text || '',
         name: (p.properties['Lead Name']?.title?.[0]?.plain_text || '').toLowerCase(),
+        stage: p.properties['Stage']?.select?.name || '',
+        notes: p.properties['Notes']?.rich_text?.[0]?.plain_text || '',
       }));
 
-      const pipelineWriteResults = await Promise.allSettled(parsed.pipelineUpdates.map(update => {
-        const nameLower = (update.name || '').toLowerCase();
-        const existing = existingLeads.find(l => l.name.includes(nameLower) || nameLower.includes(l.name));
+      // A lead in a terminal stage is a human decision. Never reopen it, never
+      // bump its Last Contact. Gardner Hensill is the case this exists for: an
+      // existing customer, deliberately closed off the pipeline, who a call full
+      // of activity about him would otherwise resurrect every week.
+      const TERMINAL_STAGES = ['won', 'closed won', 'lost'];
+      const isTerminal = (s) => TERMINAL_STAGES.includes((s || '').toLowerCase());
+
+      // Stages the model is allowed to set. 'Won'/'Closed Won'/'Lost' are absent
+      // by design — closing a lead is not an automation's call.
+      const ALLOWED_STAGES = ['New', 'Contacted', 'Follow-up', 'Proposal Sent', 'In Negotiation', 'On Hold'];
+
+      // Match on whole words, not substrings. The old test was
+      //   l.name.includes(n) || n.includes(l.name)
+      // which matches any short existing name inside a longer new one —
+      // "Davidson" would have matched the existing lead "Dave", and this pipeline
+      // currently holds "Dave", "Kim" and "Ivan". Require either an exact match or
+      // a shared token of 4+ characters.
+      const tokens = (s) => s.toLowerCase().split(/[^a-z0-9]+/i).filter(t => t.length >= 4);
+      function findExisting(name) {
+        const n = (name || '').toLowerCase().trim();
+        if (!n) return null;
+        const exact = existingLeads.find(l => l.name.trim() === n);
+        if (exact) return exact;
+        const nt = tokens(n);
+        if (!nt.length) return null;
+        return existingLeads.find(l => tokens(l.name).some(t => nt.includes(t))) || null;
+      }
+
+      const pipelineSkipped = [];
+      const candidates = parsed.pipelineUpdates.filter(update => {
+        if (!update || !update.name) return false;
+        if (isTerminal(update.stage)) {
+          pipelineSkipped.push(`${update.name} (model proposed terminal stage "${update.stage}")`);
+          return false;
+        }
+        const existing = findExisting(update.name);
+        if (existing && isTerminal(existing.stage)) {
+          pipelineSkipped.push(`${existing.rawName} (already ${existing.stage} — not reopened)`);
+          return false;
+        }
+        return true;
+      });
+
+      const pipelineWriteResults = await Promise.allSettled(candidates.map(async (update) => {
+        const existing = findExisting(update.name);
+        const stage = ALLOWED_STAGES.includes(update.stage) ? update.stage : null;
 
         if (existing) {
           const props = {};
-          if (update.stage) props['Stage'] = { select: { name: update.stage } };
-          if (update.notes) props['Notes'] = { rich_text: [{ text: { content: `[${today}] ${update.notes}` } }] };
+          if (stage && stage !== existing.stage) props['Stage'] = { select: { name: stage } };
+          if (update.notes) {
+            // Append, don't overwrite — the old code replaced the Notes field and
+            // discarded every prior entry on the lead.
+            const appended = (existing.notes ? existing.notes + '\n' : '') + `[${today}] ${update.notes}`;
+            props['Notes'] = { rich_text: [{ text: { content: appended.slice(-1900) } }] };
+          }
           if (update.followUpDate) props['Follow Up Date'] = { date: { start: update.followUpDate } };
           props['Last Contact'] = { date: { start: today } };
 
-          return fetch(`https://api.notion.com/v1/pages/${existing.id}`, {
+          const res = await fetch(`https://api.notion.com/v1/pages/${existing.id}`, {
             method: 'PATCH',
             headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' },
             body: JSON.stringify({ properties: props })
-          }).then(() => console.log(`  Pipeline updated: ${update.name} → ${update.stage}`));
-        } else {
-          return notionCreate(NOTION_DB_PIPELINE, {
-            'Lead Name': { title: [{ text: { content: update.name } }] },
-            'Stage': { select: { name: update.stage || 'New' } },
-            'Owner': update.owner ? { select: { name: update.owner } } : undefined,
-            'Notes': update.notes ? { rich_text: [{ text: { content: `[${today}] ${update.notes}` } }] } : undefined,
-            'Follow Up Date': update.followUpDate ? { date: { start: update.followUpDate } } : undefined,
-            'Last Contact': { date: { start: today } },
-            'Source': { rich_text: [{ text: { content: 'Transcript' } }] },
-          }).then(() => console.log(`  Pipeline created: ${update.name} (${update.stage || 'New'})`));
+          });
+          // The old code logged success unconditionally via .then(), so a 400 from
+          // Notion still printed "Pipeline updated". Check the response.
+          if (!res.ok) throw new Error(`Notion PATCH ${res.status}: ${(await res.text()).slice(0, 300)}`);
+          console.log(`  Pipeline updated: ${existing.rawName} ${existing.stage || '(none)'} → ${stage || existing.stage}`);
+          return true;
         }
+
+        await notionCreate(NOTION_DB_PIPELINE, {
+          'Lead Name': { title: [{ text: { content: update.name } }] },
+          'Stage': { select: { name: stage || 'New' } },
+          'Owner': update.owner ? { select: { name: update.owner } } : undefined,
+          'Notes': update.notes ? { rich_text: [{ text: { content: `[${today}] ${update.notes}` } }] } : undefined,
+          'Follow Up Date': update.followUpDate ? { date: { start: update.followUpDate } } : undefined,
+          'Last Contact': { date: { start: today } },
+          'Source': { rich_text: [{ text: { content: 'Transcript' } }] },
+        });
+        console.log(`  Pipeline created: ${update.name} (${stage || 'New'})`);
+        return true;
       }));
+
       pipelineWriteResults.forEach((r, i) => {
-        if (r.status === 'rejected') console.error(`  FAILED pipeline update for "${parsed.pipelineUpdates[i].name}":`, r.reason.message);
+        if (r.status === 'rejected') console.error(`  FAILED pipeline update for "${candidates[i].name}":`, r.reason.message);
       });
       pipelineCount = pipelineWriteResults.filter(r => r.status === 'fulfilled').length;
+
+      // Log what was deliberately not written. A silent skip is how the Gardner
+      // class of error becomes invisible.
+      if (pipelineSkipped.length) {
+        console.log(`Pipeline: ${pipelineSkipped.length} update(s) skipped by guardrails:`);
+        pipelineSkipped.forEach(s => console.log(`  SKIP ${s}`));
+      }
+    } else if (NOTION_DB_PIPELINE) {
+      // Distinguish "the model returned nothing" from "the key was never requested".
+      // Until 2026-08-16 the prompt never asked for pipelineUpdates at all, so this
+      // branch was the silent, permanent outcome and the lane looked healthy.
+      console.log(`Pipeline: no pipelineUpdates in model output (key ${parsed.pipelineUpdates === undefined ? 'ABSENT — check the prompt schema' : 'present but empty — valid no-op'})`);
+    } else {
+      console.log('Pipeline: NOTION_DB_PIPELINE not set — skipping');
     }
     console.log(`Pipeline: ${pipelineCount} leads updated`);
 
