@@ -2201,22 +2201,13 @@ async function deleteFromNotion(notionId) {
   if (!result.success) throw new Error(result.error || 'Delete failed');
 }
 
-// PINs loaded from Notion Settings on startup
-let _userPins = {};
-
-async function loadPins() {
-  try {
-    const res = await fetch('/.netlify/functions/notion-get?type=settings');
-    const data = await res.json();
-    (data.settings || []).forEach(s => {
-      if (s.key && s.key.startsWith('pin_')) {
-        _userPins[s.key.replace('pin_', '')] = s.value;
-      }
-    });
-  } catch(e) {
-    console.warn('Could not load PINs from Notion:', e);
-  }
-}
+// SECURITY 2026-08-16: PINs are NEVER loaded into the browser any more.
+// Verification happens server-side in /.netlify/functions/verify-pin. That file
+// documents the two defects this replaced: the PUBLIC notion-get endpoint was
+// serving every team PIN, and the old client-side check granted access whenever
+// the PIN load failed (`if (expected && ...)` skipped the comparison entirely).
+// Kept as a no-op so the existing `loadPins().then(() => init())` call still works.
+async function loadPins() { /* no-op by design */ }
 
 function selectUser(name) {
   // Show PIN entry
@@ -2251,19 +2242,40 @@ function pinAdvance(el, nextId) {
   if (el.value.length === 1) document.getElementById(nextId)?.focus();
 }
 
-function pinSubmit(name) {
+async function pinSubmit(name) {
   const pin = ['pin1','pin2','pin3','pin4'].map(id => document.getElementById(id)?.value || '').join('');
   if (pin.length < 4) return;
 
-  const expected = _userPins[name];
-  if (expected && pin !== expected) {
-    document.getElementById('pinError').textContent = 'Incorrect PIN. Try again.';
+  const clearPin = (msg) => {
+    const err = document.getElementById('pinError');
+    if (err) err.textContent = msg;
     ['pin1','pin2','pin3','pin4'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
     document.getElementById('pin1')?.focus();
+  };
+
+  // Server-side verification. FAILS CLOSED: any error, any non-ok response, or
+  // any exception denies access. The old client-side check did the opposite —
+  // when the PIN list was unavailable it let anyone straight through.
+  const err = document.getElementById('pinError');
+  if (err) err.textContent = 'Checking...';
+  let ok = false;
+  try {
+    const res = await fetch('/.netlify/functions/verify-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, pin })
+    });
+    const data = await res.json().catch(() => ({}));
+    ok = res.ok && data && data.ok === true;
+    if (!ok) { clearPin(data && data.error ? data.error : 'Incorrect PIN. Try again.'); return; }
+  } catch (e) {
+    clearPin('Could not verify PIN. Check your connection and try again.');
     return;
   }
 
-  // PIN correct (or no PIN configured — open access)
+  if (err) err.textContent = '';
+
+  // PIN verified by the server.
   currentUser = name;
   localStorage.setItem('tf_user', name);
 

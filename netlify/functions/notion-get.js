@@ -55,8 +55,19 @@ function prop(page, name) {
   }
 }
 
+// SECURITY 2026-08-16: this endpoint is PUBLIC and UNAUTHENTICATED — confirmed
+// readable from an unauthenticated sandbox. It must never emit a secret.
+// It was returning every `pin_*` Settings row, i.e. the whole team's Manager Hub
+// PINs, which are the Hub's only access control. PIN checking moved server-side
+// to `verify-pin.js`; these keys are now stripped from every response path.
+// If you add a Settings key holding anything sensitive, add it here too.
+const SECRET_SETTING_PREFIXES = ['pin_'];
+const isSecretSetting = (key) =>
+  !!key && SECRET_SETTING_PREFIXES.some(p => key.toLowerCase().startsWith(p));
+
 exports.handler = async (event) => {
-  // Fast path: ?type=settings only returns settings (used for PIN loading)
+  // Fast path: ?type=settings returns non-secret settings only.
+  // This used to be "used for PIN loading" — it no longer serves PINs at all.
   if (event.queryStringParameters?.type === 'settings') {
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
     try {
@@ -65,7 +76,7 @@ exports.handler = async (event) => {
       (setRes?.results || []).forEach(p => {
         const key = p.properties['Key']?.title?.[0]?.plain_text;
         const val = p.properties['Value']?.rich_text?.[0]?.plain_text;
-        if (key) settings.push({ key, value: val });
+        if (key && !isSecretSetting(key)) settings.push({ key, value: val });
       });
       return { statusCode: 200, headers, body: JSON.stringify({ settings }) };
     } catch(e) {
@@ -104,7 +115,10 @@ exports.handler = async (event) => {
       setRes.results.forEach(p => {
         const key = p.properties['Key']?.title?.[0]?.plain_text;
         const val = p.properties['Value']?.rich_text?.[0]?.plain_text;
-        if (key) { settings[key] = val; settingsIds[key] = p.id; }
+        // Secret keys (pin_*) are omitted from BOTH maps. settingsIds is used by
+        // the front-end to PATCH a setting; nothing should be patching a PIN
+        // from the browser, so withholding the id is correct as well.
+        if (key && !isSecretSetting(key)) { settings[key] = val; settingsIds[key] = p.id; }
       });
     }
 
