@@ -605,6 +605,18 @@ ${transcript.slice(0, 200000)}`;
 
     let emailSent = false;
     if (RESEND_KEY && (actionCount > 0 || decisionCount > 0)) {
+      // ── Email hardening, 2026-08-16 ──────────────────────────
+      // On 2026-08-16 the run wrote Actions and Decisions correctly but no
+      // email arrived, and the Resend API log showed NO REQUEST AT ALL — so
+      // something in the ~120 lines of Notion reads and HTML assembly below
+      // threw, and the single outer catch swallowed it. Presentation code
+      // must never be able to cost you the summary.
+      //
+      // Structure now: build the rich body in its own try. If it throws, log
+      // it loudly WITH THE STACK and fall back to a minimal plain-text body
+      // assembled only from counters already in hand — no Notion reads, no
+      // template helpers, nothing that can throw. Then send regardless.
+      let subject = null, htmlBody = null, plainTextFallback = null, degraded = false;
       try {
         const callDateFmt = new Date(callDate + 'T12:00:00').toLocaleDateString('en-US', {
           weekday: 'long', month: 'long', day: 'numeric'
@@ -720,25 +732,57 @@ ${transcript.slice(0, 200000)}`;
           });
         }
 
-        const subject = `Turnfairy Post-Call Summary — ${callDateFmt}`;
+        subject = `Turnfairy Post-Call Summary — ${callDateFmt}`;
+        htmlBody = htmlShell(html);
+        plainTextFallback = html.replace(/<[^>]+>/g, '').replace(/\n\s*\n/g, '\n').trim();
+      } catch (buildErr) {
+        // Presentation failed. Do NOT lose the email — degrade it.
+        degraded = true;
+        console.error('Post-call email BUILD failed — falling back to plain text:', buildErr && buildErr.message);
+        console.error('Build error stack:', buildErr && buildErr.stack);
+        subject = `Turnfairy Post-Call Summary — ${callDate} (plain text fallback)`;
+        plainTextFallback = [
+          `Post-call processing completed for the call on ${callDate}.`,
+          ``,
+          `${actionCount} new action item(s) created`,
+          `${decisionCount} decision(s) logged`,
+          `${pipelineCount} pipeline lead(s) updated`,
+          `${agendaMarkedDone} agenda item(s) marked Done`,
+          ``,
+          `The formatted summary could not be built for this run, so this is a`,
+          `minimal fallback. The items themselves were written to Notion correctly.`,
+          `Open the Manager Hub to review them: ${HUB_URL}`,
+          ``,
+          `Build error: ${(buildErr && buildErr.message) || 'unknown'}`,
+        ].join('\n');
+        htmlBody = null;
+      }
 
-        const htmlBody = htmlShell(html);
-        const plainTextFallback = html.replace(/<[^>]+>/g, '').replace(/\n\s*\n/g, '\n').trim();
+      // Send whatever we have. This runs on both the rich and degraded paths.
+      try {
+        const payload = { from: FROM_EMAIL, to: TEAM_EMAILS, subject, text: plainTextFallback };
+        if (htmlBody) payload.html = htmlBody;
 
         const emailRes = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: FROM_EMAIL, to: TEAM_EMAILS, subject, text: plainTextFallback, html: htmlBody })
+          body: JSON.stringify(payload)
         });
 
+        // Always log the status code. "Email send failed" without a code told
+        // us nothing, and Resend's own log was the only place the truth lived.
         if (emailRes.ok) {
           emailSent = true;
-          console.log('✓ Post-call summary email sent');
+          console.log(`Post-call summary email sent (Resend ${emailRes.status}${degraded ? ', PLAIN TEXT FALLBACK' : ''}) to ${TEAM_EMAILS.length} recipient(s) from ${FROM_EMAIL}`);
         } else {
-          console.error('Email send failed:', await emailRes.text());
+          console.error(`Email send FAILED — Resend ${emailRes.status}:`, (await emailRes.text()).slice(0, 500));
+          console.error(`  from=${FROM_EMAIL} to=${TEAM_EMAILS.join(',')} — a 403 here usually means the FROM domain is not verified in Resend.`);
         }
-      } catch (emailErr) {
-        console.error('Post-call email error:', emailErr.message);
+      } catch (sendErr) {
+        // A throw here means the request never reached Resend at all — which
+        // is exactly the 2026-08-16 symptom: nothing in the Resend API log.
+        console.error('Post-call email SEND threw — request never reached Resend:', sendErr && sendErr.message);
+        console.error('Send error stack:', sendErr && sendErr.stack);
       }
     } else if (!RESEND_KEY) {
       console.log('No RESEND_API_KEY — skipping email');
